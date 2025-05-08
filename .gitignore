@@ -1,7 +1,9 @@
 *.o
 *.d
+*.s
 cool-lex.cc
 cgen
 lexer
 parser
 semant
+grading/
