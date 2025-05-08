@@ -103,9 +103,9 @@ int comment_nesting_level;
 }
 
  /*
-  *  One line comments
+  *  Single line comments
   */
---.*$
+--.*$?
 
  /*
   * Integers
@@ -202,8 +202,7 @@ f(?i:alse)|t(?i:rue) {
   \\t add_string_char('\t');
   \\b add_string_char('\b');
   \\f add_string_char('\f');
-  \\(.|\n) add_string_char(yytext[1]);
-  \0 {
+  \\?\0 {
     if (string_error == STRING_ERROR_NONE) {
       string_error = STRING_ERROR_NULL_CHAR;
     }
@@ -218,6 +217,7 @@ f(?i:alse)|t(?i:rue) {
     cool_yylval.error_msg = "EOF in string constant";
     return ERROR;
   }
+  \\(.|\n) add_string_char(yytext[1]);
   . add_string_char(yytext[0]);
 }
 
