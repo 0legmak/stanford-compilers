@@ -1,0 +1,6 @@
+*.o
+cool-lex.cc
+cgen
+lexer
+parser
+semant
