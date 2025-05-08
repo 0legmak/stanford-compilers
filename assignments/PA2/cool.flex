@@ -45,6 +45,8 @@ extern YYSTYPE cool_yylval;
 
 %}
 
+%option noyywrap
+
 /*
  * Define names for regular expressions here.
  */
