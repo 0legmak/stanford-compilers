@@ -1,4 +1,5 @@
 *.o
+*.d
 cool-lex.cc
 cgen
 lexer
