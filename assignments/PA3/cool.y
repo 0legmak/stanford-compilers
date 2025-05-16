@@ -148,7 +148,7 @@
 
     /* Precedence declarations go here. */
     
-    %nonassoc IN
+    %precedence IN
     %right ASSIGN
     %precedence NOT
     %left LE '<' '='
@@ -248,14 +248,14 @@
       ;
 
     let_expression
-      : LET OBJECTID ':' TYPEID ASSIGN expression IN expression
-        { $$ = let($2, $4, $6, $8); }
-      | LET OBJECTID ':' TYPEID ASSIGN expression ',' let_expression
-        { $$ = let($2, $4, $6, $8); }
-      | LET OBJECTID ':' TYPEID IN expression
-        { $$ = let($2, $4, no_expr(), $6); }
-      | LET OBJECTID ':' TYPEID  ',' let_expression
-        { $$ = let($2, $4, no_expr(), $6); }
+      : OBJECTID ':' TYPEID ASSIGN expression IN expression
+        { $$ = let($1, $3, $5, $7); }
+      | OBJECTID ':' TYPEID ASSIGN expression ',' let_expression
+        { $$ = let($1, $3, $5, $7); }
+      | OBJECTID ':' TYPEID IN expression
+        { $$ = let($1, $3, no_expr(), $5); }
+      | OBJECTID ':' TYPEID  ',' let_expression
+        { $$ = let($1, $3, no_expr(), $5); }
 
     case
       : OBJECTID ':' TYPEID DARROW expression ';'
@@ -283,8 +283,8 @@
         { $$ = loop($2, $4); }
       | '{' block '}'
         { $$ = block($2); }
-      | let_expression
-        { $$ = $1; }
+      | LET let_expression
+        { $$ = $2; }
       | CASE expression OF case_list ESAC
         { $$ = typcase($2, $4); }
       | NEW TYPEID
