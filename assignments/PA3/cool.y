@@ -147,7 +147,7 @@
     %nonassoc IN
     %right ASSIGN
     %nonassoc NOT
-    %left LE '<' '='
+    %nonassoc LE '<' '='
     %left '+' '-'
     %left '*' '/'
     %nonassoc ISVOID
