@@ -278,9 +278,9 @@
         { $$ = branch($1, $3, $5); }
 
     case_list
-      :	case ';'
+      :	case
         { $$ = single_Cases($1); }
-      | case_list case ';'
+      | case_list case
         { $$ = append_Cases($1, single_Cases($2)); }
       ;
 
