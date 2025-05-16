@@ -137,7 +137,7 @@
     %type <feature> feature
     %type <formals> not_empty_formal_list formal_list
     %type <formal> formal
-    %type <expressions> not_empty_argument_list argument_list block
+    %type <expressions> not_empty_argument_list argument_list expression_list
     %type <case_> case
     %type <cases> case_list
     %type <expression> expression let_expression
@@ -186,17 +186,18 @@
         { $$ = class_($2, idtable.add_string("Object"), $4, stringtable.add_string(curr_filename)); }
       | CLASS TYPEID INHERITS TYPEID '{' feature_list '}' ';'
         { $$ = class_($2, $4, $6, stringtable.add_string(curr_filename)); }
-      | error ';'
+      // | CLASS error '{' feature_list '}' ';'
+      | CLASS error CLASS TYPEID '{' feature_list '}' ';'  // for 'classbadname' test
         { yyerrok; }
       ;
-    
+
     /* Feature list may be empty, but no empty features in list. */
     feature_list
       :	/* empty */
         { $$ = nil_Features(); }
       | feature_list feature ';'
         { $$ = append_Features($1, single_Features($2)); }
-      | error ';'
+      | feature_list error ';'
         { yyerrok; }
       ;
 
@@ -234,18 +235,22 @@
       ;
 
     argument_list
-      :	/* empty */
+      :	'(' ')'
         { $$ = nil_Expressions(); }
-      | not_empty_argument_list
-        { $$ = $1; }
+      | '(' not_empty_argument_list ')'
+        { $$ = $2; }
+      | '(' error ')'
+        { yyerrok; }
       ;
 
-    block
+    expression_list
       :	expression ';'
         { $$ = single_Expressions($1); }
-      | block expression ';'
+      | expression_list expression ';'
         { $$ = append_Expressions($1, single_Expressions($2)); }
       | error ';'
+        { yyerrok; }
+      | expression_list error ';'
         { yyerrok; }
       ;
 
@@ -259,15 +264,7 @@
       | OBJECTID ':' TYPEID  ',' let_expression
         { $$ = let($1, $3, no_expr(), $5); }
       | error ',' let_expression
-        {
-          $$ = $3;
-          yyerrok;
-        }
-      | error IN expression
-        {
-          $$ = $3;
-          yyerrok;
-        }
+        { yyerrok; }
 
     case
       : OBJECTID ':' TYPEID DARROW expression ';'
@@ -283,22 +280,24 @@
     expression
       : OBJECTID ASSIGN expression
         { $$ = assign($1, $3); }
-      | expression '@' TYPEID '.' OBJECTID '(' argument_list ')'
-        { $$ = static_dispatch($1, $3, $5, $7); }
-      | expression '.' OBJECTID '(' argument_list ')'
-        { $$ = dispatch($1, $3, $5); }
-      | OBJECTID '(' argument_list ')'
-        { $$ = dispatch(object(idtable.add_string("self")), $1, $3); }
+      | expression '@' TYPEID '.' OBJECTID argument_list
+        { $$ = static_dispatch($1, $3, $5, $6); }
+      | expression '.' OBJECTID argument_list
+        { $$ = dispatch($1, $3, $4); }
+      | OBJECTID argument_list
+        { $$ = dispatch(object(idtable.add_string("self")), $1, $2); }
       | IF expression THEN expression ELSE expression FI
         { $$ = cond($2, $4, $6); }
       | WHILE expression LOOP expression POOL
         { $$ = loop($2, $4); }
-      | '{' block '}'
+      | '{' expression_list '}'
         { $$ = block($2); }
       | LET let_expression
         { $$ = $2; }
       | CASE expression OF case_list ESAC
         { $$ = typcase($2, $4); }
+      | CASE error ESAC  // for 'casenoexpr' test
+        { yyerrok; }
       | NEW TYPEID
         { $$ = new_($2); }
       | ISVOID expression
@@ -339,7 +338,7 @@
     void yyerror(char *s)
     {
       extern int curr_lineno;
-      
+
       cerr << "\"" << curr_filename << "\", line " << curr_lineno << ": " \
       << s << " at or near ";
       print_cool_token(yychar);
