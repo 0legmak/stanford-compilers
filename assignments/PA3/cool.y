@@ -148,6 +148,7 @@
 
     /* Precedence declarations go here. */
     
+    %nonassoc IN
     %right ASSIGN
     %precedence NOT
     %left LE '<' '='
