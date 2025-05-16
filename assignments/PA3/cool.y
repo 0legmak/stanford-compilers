@@ -135,27 +135,23 @@
     %type <class_> class
     %type <features> feature_list
     %type <feature> feature
-    %type <formals> not_empty_formal_list
-    %type <formals> formal_list
+    %type <formals> not_empty_formal_list formal_list
     %type <formal> formal
-    %type <expressions> not_empty_argument_list
-    %type <expressions> argument_list
-    %type <expressions> block
+    %type <expressions> not_empty_argument_list argument_list block
     %type <case_> case
     %type <cases> case_list
-    %type <expression> expression
-    %type <expression> let_expression
-
+    %type <expression> expression let_expression
+    
     /* Precedence declarations go here. */
     
-    %precedence IN
+    %nonassoc IN
     %right ASSIGN
-    %precedence NOT
+    %nonassoc NOT
     %left LE '<' '='
     %left '+' '-'
     %left '*' '/'
-    %precedence ISVOID
-    %precedence '~'
+    %nonassoc ISVOID
+    %nonassoc '~'
     %nonassoc '@'
     %left '.'
     
