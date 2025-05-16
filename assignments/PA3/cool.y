@@ -190,6 +190,8 @@
         { $$ = class_($2, idtable.add_string("Object"), $4, stringtable.add_string(curr_filename)); }
       | CLASS TYPEID INHERITS TYPEID '{' feature_list '}' ';'
         { $$ = class_($2, $4, $6, stringtable.add_string(curr_filename)); }
+      | error ';'
+        { yyerrok; }
       ;
     
     /* Feature list may be empty, but no empty features in list. */
@@ -198,6 +200,8 @@
         { $$ = nil_Features(); }
       | feature_list feature ';'
         { $$ = append_Features($1, single_Features($2)); }
+      | error ';'
+        { yyerrok; }
       ;
 
     feature
@@ -245,6 +249,8 @@
         { $$ = single_Expressions($1); }
       | block expression ';'
         { $$ = append_Expressions($1, single_Expressions($2)); }
+      | error ';'
+        { yyerrok; }
       ;
 
     let_expression
@@ -256,6 +262,16 @@
         { $$ = let($1, $3, no_expr(), $5); }
       | OBJECTID ':' TYPEID  ',' let_expression
         { $$ = let($1, $3, no_expr(), $5); }
+      | error ',' let_expression
+        {
+          $$ = $3;
+          yyerrok;
+        }
+      | error IN expression
+        {
+          $$ = $3;
+          yyerrok;
+        }
 
     case
       : OBJECTID ':' TYPEID DARROW expression ';'
