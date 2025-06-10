@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 
@@ -94,6 +95,50 @@ Symbol class__class::get_parent() {
     return parent;
 }
 
+Features class__class::get_features() {
+    return features;
+}
+
+bool attr_class::is_method() {
+    return false;
+}
+
+Symbol attr_class::get_name() {
+    return name;
+}
+
+Symbol attr_class::get_type() {
+    return type_decl;
+}
+
+Formals attr_class::get_formals() {
+    return nil_Formals();
+}
+
+bool method_class::is_method() {
+    return true;
+}
+
+Symbol method_class::get_name() {
+    return name;
+}
+
+Symbol method_class::get_type() {
+    return return_type;
+}
+
+Formals method_class::get_formals() {
+    return formals;
+}
+
+Symbol formal_class::get_name() {
+    return name;
+}
+
+Symbol formal_class::get_type() {
+    return type_decl;
+}
+
 
 // This is a structure that may be used to contain the semantic
 // information such as the inheritance graph.  You may use it or not as
@@ -109,6 +154,14 @@ public:
     ostream& semant_error(Symbol filename, tree_node *t);
 
 private:
+    static constexpr int kNoParent = -1;
+
+    using MethodSignature = std::vector<Symbol>;
+    struct FindMethodResult {
+        int class_id;
+        const MethodSignature& signature;
+    };
+
     void install_basic_classes();
     void add_class(const Class_ cls) {
         const auto name = cls->get_name();
@@ -116,39 +169,72 @@ private:
             semant_error(cls) << "Class " << name << " is already defined." << std::endl;
         }
     }
+    void build_class_map(const Classes classes);
     static bool is_non_inheritable_class(const Symbol name) {
         return name == Int || name == Bool || name == Str;
     }
-    
+    int class_count() const {
+        return class_map.size();
+    }
+    void build_inheritance_graph();
+    void fill_parent(int u, int p) {
+        for (const int v : inheritance_graph[u]) {
+            if (v != p) {
+                parent[v] = u;
+                fill_parent(v, u);
+            }
+        }
+    };
+    void fill_parent() {
+        parent.resize(class_count(), kNoParent);
+        fill_parent(class_symbol_to_id[Object], kNoParent);
+    }
+    void collect_methods(int u, int p);
+    std::optional<FindMethodResult> find_method(int class_id, const Symbol method_name) {
+        for (; class_id != kNoParent; class_id = parent[class_id]) {
+            if (const auto iter = class_methods[class_id].find(method_name); iter != class_methods[class_id].end()) {
+                return std::make_optional<FindMethodResult>(class_id, iter->second);
+            }
+        }
+        return {};
+    };
+    void collect_methods();
+
     int semant_errors;
     ostream& error_stream;
     std::unordered_map<Symbol, Class_> class_map;
+    std::unordered_map<Symbol, int> class_symbol_to_id;
+    std::vector<Symbol> class_id_to_symbol;
+    std::vector<std::vector<int>> inheritance_graph;
+    std::vector<int> parent;
+    std::vector<std::unordered_map<Symbol, MethodSignature>> class_methods;
 };
 
-ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
+void ClassTable::build_class_map(const Classes classes) {
     install_basic_classes();
     for (int i = classes->first(); classes->more(i); i = classes->next(i)) {
         add_class(classes->nth(i));
     }
-    if (class_map.find(Main) == class_map.end()) {
+    if (!class_map.contains(Main)) {
         semant_error() << "Main class not found in class list." << std::endl;
     }
-    const int class_count = class_map.size();
-    std::unordered_map<Symbol, int> class_name_to_id;
-    std::vector<Symbol> class_id_to_name(class_count);
+    class_id_to_symbol.resize(class_count());
     int class_name_id = 0;
     for (const auto& [name, cls] : class_map) {
-        class_name_to_id[name] = class_name_id;
-        class_id_to_name[class_name_id] = name;
+        class_symbol_to_id[name] = class_name_id;
+        class_id_to_symbol[class_name_id] = name;
         ++class_name_id;
     }
-    std::vector<std::vector<int>> inheritance_graph(class_count);
+}
+
+void ClassTable::build_inheritance_graph() {
+    inheritance_graph.resize(class_count());
     for (const auto& [name, cls] : class_map) {
         if (name == Object) {
             continue;
         }
         const auto parent_name = cls->get_parent();
-        if (const auto parent_class_iter = class_map.find(parent_name); parent_class_iter == class_map.end()) {
+        if (!class_map.contains(parent_name)) {
             semant_error(cls) << "Parent class " << parent_name << " is not defined." << std::endl;
             continue;
         }
@@ -156,10 +242,10 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) 
             semant_error(cls) << "Class " << parent_name << " is non-inheritable and cannot be a parent class." << std::endl;
             continue;
         }
-        inheritance_graph[class_name_to_id[parent_name]].push_back(class_name_to_id[name]);
+        inheritance_graph[class_symbol_to_id[parent_name]].push_back(class_symbol_to_id[name]);
     }
-    std::vector<bool> visited(class_count);
-    std::vector<bool> on_stack(class_count);
+    std::vector<bool> visited(class_count());
+    std::vector<bool> on_stack(class_count());
     std::vector<int> cycle;
     std::optional<int> cycle_start;
     auto cycle_check = [&](auto&& cycle_check, int u) -> bool {
@@ -186,19 +272,114 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) 
         }
         return cycle.empty();
     };
-    for (int u = 0; u < class_count; ++u) {
+    for (int u = 0; u < class_count(); ++u) {
         if (!visited[u]) {
             if (!cycle_check(cycle_check, u)) {
-                auto& err_stream = semant_error(class_map[class_id_to_name[cycle.front()]]);
+                auto& err_stream = semant_error(class_map[class_id_to_symbol[cycle.front()]]);
                 err_stream << "Inheritance graph contains a cycle: ";
                 for (const int u : cycle) {
-                    err_stream << class_id_to_name[u] << " inherits ";
+                    err_stream << class_id_to_symbol[u] << " inherits ";
                 }
-                err_stream << class_id_to_name[cycle.front()] << std::endl;
+                err_stream << class_id_to_symbol[cycle.front()] << "." << std::endl;
                 break;
             }
         }
     }
+}
+
+void ClassTable::collect_methods(int u, int p) {
+    const auto class_symbol = class_id_to_symbol[u];
+    const auto cls = class_map[class_symbol];
+    const auto features = cls->get_features();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (!feature->is_method()) {
+            continue;
+        }
+        const auto method_name = feature->get_name();
+        if (class_methods[u].contains(method_name)) {
+            semant_error(cls->get_filename(), feature)
+                << "Class " << class_symbol << " has multiple definitions of method " << method_name << "." << std::endl;
+            continue;
+        }
+        const auto method_signature = [&]() -> MethodSignature {
+            MethodSignature method_signature;
+            const auto formals = feature->get_formals();
+            std::unordered_set<Symbol> formal_names;
+            for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+                const auto formal = formals->nth(j);
+                const auto formal_name = formal->get_name();
+                const auto formal_type = formal->get_type();
+                if (formal_name == self) {
+                    semant_error(cls->get_filename(), formal)
+                        << "Class " << class_symbol << " cannot use self as a formal parameter name in method "
+                        << method_name << "." << std::endl;
+                    return {};
+                }
+                if (!formal_names.insert(formal_name).second) {
+                    semant_error(cls->get_filename(), formal)
+                        << "Class " << class_symbol << " has multiple definitions of formal parameter " << formal_name
+                        << " in method " << method_name << "." << std::endl;
+                    return {};
+                }
+                if (formal_type == SELF_TYPE) {
+                    semant_error(cls->get_filename(), formal)
+                        << "Class " << class_symbol << " cannot use SELF_TYPE as a formal parameter type in method "
+                        << method_name << "." << std::endl;
+                    return {};
+                }
+                method_signature.push_back(formal_type);
+            }
+            method_signature.push_back(feature->get_type());
+            return method_signature;
+        }();
+        if (method_signature.empty()) {
+            continue;
+        }
+        ;
+        if (const auto res = find_method(p, method_name); res && res->signature != method_signature) {
+            semant_error(cls->get_filename(), feature)
+                << "Class " << class_symbol << " redefines method " << method_name
+                << " with a different signature than in parent class "
+                << class_id_to_symbol[res->class_id] << "." << std::endl;
+            continue;
+        }
+        class_methods[u][method_name] = method_signature;
+    }
+    for (const int v : inheritance_graph[u]) {
+        if (v != p) {
+            collect_methods(v, u);
+        }
+    }
+};
+
+void ClassTable::collect_methods() {
+    class_methods.resize(class_count());
+    collect_methods(class_symbol_to_id[Object], kNoParent);
+    if (class_map.contains(Main) && !find_method(class_symbol_to_id[Main], main_meth)) {
+        semant_error(class_map[Main]) << "Class " << Main << " does not define method " << main_meth << "." << std::endl;
+    }
+    if (semant_debug) {
+        for (int u = 0; u < class_count(); ++u) {
+            const auto& methods = class_methods[u];
+            std::cerr << "Class " << class_id_to_symbol[u] << " methods:\n";
+            for (const auto& [method_name, signature] : methods) {
+                std::cerr << "  " << method_name << "(";
+                for (size_t i = 0; i + 1 < signature.size(); ++i) {
+                    std::cerr << signature[i];
+                    if (i + 2 < signature.size()) std::cerr << ", ";
+                }
+                std::cerr << ") : " << signature.back() << "\n";
+            }
+        }
+    }
+}
+
+ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
+    build_class_map(classes);
+    build_inheritance_graph();
+    fill_parent();
+    collect_methods();
 }
 
 void ClassTable::install_basic_classes() {

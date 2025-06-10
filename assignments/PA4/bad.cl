@@ -8,6 +8,7 @@ class C {
 		self;
            }
 	};
+	other(a : Int) : C { self };
 };
 
 Class Main {
@@ -37,3 +38,13 @@ class MyInt inherits Int {};
 class C {};
 
 class S inherits S {};
+
+class MethodTest inherits C {
+	dup() : SELF_TYPE { self };
+	dup() : SELF_TYPE { self };
+	init(x : Int, y : Bool) : C { self };
+	other(a : String) : C { self };
+	dup_formal(a : Int, a : Int) : SELF_TYPE { self };
+	self_formal(self : Int) : SELF_TYPE { self };
+	self_type_formal(a : SELF_TYPE) : SELF_TYPE { self };
+};
