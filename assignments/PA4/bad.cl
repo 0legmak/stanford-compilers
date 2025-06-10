@@ -20,3 +20,20 @@ Class Main {
 	 }
 	};
 };
+
+class A inherits B {
+};
+
+class B inherits D {
+};
+
+class D inherits A {
+};
+
+class Q inherits None {};
+
+class MyInt inherits Int {};
+
+class C {};
+
+class S inherits S {};
