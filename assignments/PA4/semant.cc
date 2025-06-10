@@ -95,12 +95,6 @@ Symbol class__class::get_parent() {
 }
 
 
-const std::string kObjectClassName = "Object";
-
-bool is_non_inheritable_class(const std::string& name) {
-    return name == "Int" || name == "Bool" || name == "String";
-}
-
 // This is a structure that may be used to contain the semantic
 // information such as the inheritance graph.  You may use it or not as
 // you like: it is only here to provide a container for the supplied
@@ -117,15 +111,18 @@ public:
 private:
     void install_basic_classes();
     void add_class(const Class_ cls) {
-        const std::string name = cls->get_name()->get_string();
+        const auto name = cls->get_name();
         if (!class_map.insert({ name, cls }).second) {
             semant_error(cls) << "Class " << name << " is already defined." << std::endl;
         }
     }
+    static bool is_non_inheritable_class(const Symbol name) {
+        return name == Int || name == Bool || name == Str;
+    }
     
     int semant_errors;
     ostream& error_stream;
-    std::unordered_map<std::string, Class_> class_map;
+    std::unordered_map<Symbol, Class_> class_map;
 };
 
 ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
@@ -133,12 +130,12 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) 
     for (int i = classes->first(); classes->more(i); i = classes->next(i)) {
         add_class(classes->nth(i));
     }
-    if (class_map.find("Main") == class_map.end()) {
+    if (class_map.find(Main) == class_map.end()) {
         semant_error() << "Main class not found in class list." << std::endl;
     }
     const int class_count = class_map.size();
-    std::unordered_map<std::string, int> class_name_to_id;
-    std::vector<std::string> class_id_to_name(class_count);
+    std::unordered_map<Symbol, int> class_name_to_id;
+    std::vector<Symbol> class_id_to_name(class_count);
     int class_name_id = 0;
     for (const auto& [name, cls] : class_map) {
         class_name_to_id[name] = class_name_id;
@@ -147,13 +144,10 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) 
     }
     std::vector<std::vector<int>> inheritance_graph(class_count);
     for (const auto& [name, cls] : class_map) {
-        if (name == kObjectClassName) {
+        if (name == Object) {
             continue;
         }
-        std::string parent_name = cls->get_parent()->get_string();
-        if (parent_name.empty()) {
-            parent_name = kObjectClassName;
-        }
+        const auto parent_name = cls->get_parent();
         if (const auto parent_class_iter = class_map.find(parent_name); parent_class_iter == class_map.end()) {
             semant_error(cls) << "Parent class " << parent_name << " is not defined." << std::endl;
             continue;
@@ -240,7 +234,6 @@ void ClassTable::install_basic_classes() {
 					       single_Features(method(type_name, nil_Formals(), Str, no_expr()))),
 			       single_Features(method(copy, nil_Formals(), SELF_TYPE, no_expr()))),
 	       filename);
-    class_map[Object->get_string()] = Object_class;
 
     // 
     // The IO class inherits from Object. Its methods are
@@ -262,7 +255,6 @@ void ClassTable::install_basic_classes() {
 					       single_Features(method(in_string, nil_Formals(), Str, no_expr()))),
 			       single_Features(method(in_int, nil_Formals(), Int, no_expr()))),
 	       filename);  
-    class_map[IO->get_string()] = IO_class;
 
     //
     // The Int class has no methods and only a single attribute, the
@@ -273,14 +265,12 @@ void ClassTable::install_basic_classes() {
 	       Object,
 	       single_Features(attr(val, prim_slot, no_expr())),
 	       filename);
-    class_map[Int->get_string()] = Int_class;
 
     //
     // Bool also has only the "val" slot.
     //
     Class_ Bool_class =
 	class_(Bool, Object, single_Features(attr(val, prim_slot, no_expr())),filename);
-    class_map[Bool->get_string()] = Bool_class;
 
     //
     // The class Str has a number of slots and operations:
@@ -310,7 +300,12 @@ void ClassTable::install_basic_classes() {
 						      Str, 
 						      no_expr()))),
 	       filename);
-    class_map[Str->get_string()] = Str_class;
+
+    class_map[Object] = Object_class;
+    class_map[IO] = IO_class;
+    class_map[Int] = Int_class;
+    class_map[Bool] = Bool_class;
+    class_map[Str] = Str_class;
 }
 
 ////////////////////////////////////////////////////////////////////
