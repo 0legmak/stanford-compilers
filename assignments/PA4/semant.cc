@@ -346,9 +346,22 @@ void ClassTable::collect_methods(int u, int p) {
                         << method_name << "." << std::endl;
                     return {};
                 }
+                if (!class_map.contains(formal_type)) {
+                    semant_error(cls->get_filename(), formal)
+                        << "Class " << class_symbol << " has a method " << method_name
+                        << " with an undefined formal parameter type " << formal_type << "." << std::endl;
+                    return {};
+                }
                 method_signature.push_back(formal_type);
             }
-            method_signature.push_back(feature->get_type());
+            const auto method_type = feature->get_type();
+            if (!class_map.contains(method_type) && method_type != SELF_TYPE) {
+                semant_error(cls->get_filename(), feature)
+                    << "Class " << class_symbol << " has a method " << method_name
+                    << " with an undefined return type " << method_type << "." << std::endl;
+                return {};
+            }
+            method_signature.push_back(method_type);
             return method_signature;
         }();
         if (method_signature.empty()) {

@@ -47,6 +47,8 @@ class MethodTest inherits C {
 	dup_formal(a : Int, a : Int) : SELF_TYPE { self };
 	self_formal(self : Int) : SELF_TYPE { self };
 	self_type_formal(a : SELF_TYPE) : SELF_TYPE { self };
+	bad_formal_type(a : Bad) : SELF_TYPE { self };
+	bad_return_type() : Bad { 0 };
 };
 
 class AttrTest inherits C {
