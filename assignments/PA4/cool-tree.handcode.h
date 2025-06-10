@@ -8,6 +8,7 @@
 #include "tree.h"
 #include "cool.h"
 #include "stringtab.h"
+#include "symtab.h"
 #define yylineno curr_lineno;
 extern int yylineno;
 
@@ -44,6 +45,17 @@ typedef Expressions_class *Expressions;
 typedef list_node<Case> Cases_class;
 typedef Cases_class *Cases;
 
+class TypeChecker {
+public:
+	virtual ~TypeChecker() {}
+    virtual std::ostream& get_error_stream(tree_node* node) = 0;
+	virtual const Class_ get_current_class() = 0;
+	virtual SymbolTable<Symbol, Entry>& get_symbol_table() = 0;
+	virtual bool has_class(const Symbol class_name) = 0;
+	virtual bool is_class_conformant(const Symbol child_class, const Symbol parent_class) = 0;
+	virtual Symbol lub(const Symbol cls1, const Symbol cls2) = 0;
+};
+
 #define Program_EXTRAS                          \
 virtual void semant() = 0;			\
 virtual void dump_with_types(ostream&, int) = 0; 
@@ -76,6 +88,7 @@ virtual bool is_method() = 0; \
 virtual Symbol get_name() = 0; \
 virtual Symbol get_type() = 0; \
 virtual Formals get_formals() = 0; \
+virtual Expression get_expr() = 0; \
 
 
 #define Feature_SHARED_EXTRAS                                       \
@@ -84,6 +97,7 @@ bool is_method() override; \
 Symbol get_name() override; \
 Symbol get_type() override; \
 Formals get_formals() override; \
+Expression get_expr() override; \
 
 
 
@@ -115,9 +129,11 @@ Symbol get_type() { return type; }           \
 Expression set_type(Symbol s) { type = s; return this; } \
 virtual void dump_with_types(ostream&,int) = 0;  \
 void dump_type(ostream&, int);               \
-Expression_class() { type = (Symbol) NULL; }
+Expression_class() { type = (Symbol) NULL; } \
+virtual void check_types(TypeChecker& type_checker) = 0; \
 
 #define Expression_SHARED_EXTRAS           \
-void dump_with_types(ostream&,int); 
+void dump_with_types(ostream&,int);  \
+void check_types(TypeChecker& type_checker) override; \
 
 #endif
