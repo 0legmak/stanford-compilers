@@ -161,6 +161,10 @@ private:
         int class_id;
         const MethodSignature& signature;
     };
+    struct FindAttributeResult {
+        int class_id;
+        const Symbol type;
+    };
 
     void install_basic_classes();
     void add_class(const Class_ cls) {
@@ -170,6 +174,9 @@ private:
         }
     }
     void build_class_map(const Classes classes);
+    static bool is_builtin_class(const Symbol name) {
+        return name == Object || name == Int || name == Bool || name == Str || name == IO;
+    }
     static bool is_non_inheritable_class(const Symbol name) {
         return name == Int || name == Bool || name == Str;
     }
@@ -199,6 +206,16 @@ private:
         return {};
     };
     void collect_methods();
+    void collect_attributes(int u, int p);
+    std::optional<FindAttributeResult> find_attribute(int class_id, const Symbol attr_name) {
+        for (; class_id != kNoParent; class_id = parent[class_id]) {
+            if (const auto iter = class_attributes[class_id].find(attr_name); iter != class_attributes[class_id].end()) {
+                return std::make_optional<FindAttributeResult>(class_id, iter->second);
+            }
+        }
+        return {};
+    };
+    void collect_attributes();
 
     int semant_errors;
     ostream& error_stream;
@@ -208,6 +225,7 @@ private:
     std::vector<std::vector<int>> inheritance_graph;
     std::vector<int> parent;
     std::vector<std::unordered_map<Symbol, MethodSignature>> class_methods;
+    std::vector<std::unordered_map<Symbol, Symbol>> class_attributes;
 };
 
 void ClassTable::build_class_map(const Classes classes) {
@@ -336,7 +354,6 @@ void ClassTable::collect_methods(int u, int p) {
         if (method_signature.empty()) {
             continue;
         }
-        ;
         if (const auto res = find_method(p, method_name); res && res->signature != method_signature) {
             semant_error(cls->get_filename(), feature)
                 << "Class " << class_symbol << " redefines method " << method_name
@@ -375,11 +392,63 @@ void ClassTable::collect_methods() {
     }
 }
 
+void ClassTable::collect_attributes(int u, int p) {
+    const auto class_symbol = class_id_to_symbol[u];
+    const auto cls = class_map[class_symbol];
+    const auto features = cls->get_features();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (feature->is_method()) {
+            continue;
+        }
+        const auto attr_name = feature->get_name();
+        if (const auto res = find_attribute(u, attr_name)) {
+            if (res->class_id == u) {
+                semant_error(cls->get_filename(), feature)
+                    << "Class " << class_symbol << " redefines attribute " << attr_name << "." << std::endl;
+            } else {
+                semant_error(cls->get_filename(), feature)
+                    << "Class " << class_symbol << " redefines attribute " << attr_name
+                    << " in parent class " << class_id_to_symbol[res->class_id] << "." << std::endl;
+            }
+            continue;
+        }
+        const auto attr_type = feature->get_type();
+        if (!is_builtin_class(class_symbol) && !class_map.contains(attr_type) && attr_type != SELF_TYPE) {
+            semant_error(cls->get_filename(), feature)
+                << "Class " << class_symbol << " has an attribute " << attr_name
+                << " with an undefined type " << attr_type << "." << std::endl;
+            continue;
+        }
+        class_attributes[u][attr_name] = attr_type;
+    }
+    for (const int v : inheritance_graph[u]) {
+        if (v != p) {
+            collect_attributes(v, u);
+        }
+    }
+}
+
+void ClassTable::collect_attributes() {
+    class_attributes.resize(class_count());
+    collect_attributes(class_symbol_to_id[Object], kNoParent);
+    if (semant_debug) {
+        for (int u = 0; u < class_count(); ++u) {
+            const auto& attrs = class_attributes[u];
+            std::cerr << "Class " << class_id_to_symbol[u] << " attributes:\n";
+            for (const auto& [attr_name, attr_type] : attrs) {
+                std::cerr << "  " << attr_name << " : " << attr_type << "\n";
+            }
+        }
+    }
+}
+
 ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
     build_class_map(classes);
     build_inheritance_graph();
     fill_parent();
     collect_methods();
+    collect_attributes();
 }
 
 void ClassTable::install_basic_classes() {

@@ -48,3 +48,10 @@ class MethodTest inherits C {
 	self_formal(self : Int) : SELF_TYPE { self };
 	self_type_formal(a : SELF_TYPE) : SELF_TYPE { self };
 };
+
+class AttrTest inherits C {
+	a : Int;
+	noType : NoType;
+	x : String;
+	x : String;
+};
