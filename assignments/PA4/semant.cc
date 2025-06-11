@@ -6,6 +6,7 @@
 #include "semant.h"
 #include "utilities.h"
 
+#include <bit>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -173,6 +174,13 @@ private:
         int class_id;
         const Symbol type;
     };
+    struct LcaSparseTableNode {
+        int depth;
+        int node;
+        bool operator<(const LcaSparseTableNode& other) const {
+            return depth < other.depth;
+        }
+    };
 
     void install_basic_classes();
     void add_class(const Class_ cls) {
@@ -192,18 +200,8 @@ private:
         return class_map.size();
     }
     void build_inheritance_graph();
-    void fill_parent(int u, int p) {
-        for (const int v : inheritance_graph[u]) {
-            if (v != p) {
-                parent[v] = u;
-                fill_parent(v, u);
-            }
-        }
-    };
-    void fill_parent() {
-        parent.resize(class_count(), kNoParent);
-        fill_parent(class_symbol_to_id.at(Object), kNoParent);
-    }
+    void precompute_lca_lookup_table();
+    int lookup_lca(const std::vector<int>& nodes);
     void collect_methods(int u, int p);
     std::optional<FindMethodResult> find_method(int class_id, const Symbol method_name) {
         for (; class_id != kNoParent; class_id = parent[class_id]) {
@@ -240,14 +238,15 @@ private:
     }
 	bool is_class_conformant(const Symbol child_class, const Symbol parent_class) override {
         const auto parent_class_id = class_symbol_to_id.at(parent_class);
-        for (auto class_id = class_symbol_to_id.at(child_class); class_id != kNoParent; class_id = parent[class_id]) {
-            if (class_id == parent_class_id) {
-                return true;
-            }
-        }
-        return false;
+        return lookup_lca({parent_class_id, class_symbol_to_id.at(child_class)}) == parent_class_id;
     }
-    Symbol lub(const Symbol cls1, const Symbol cls2) override;
+    Symbol lub(const std::vector<Symbol>& classes) override {
+        std::vector<int> nodes(classes.size());
+        for (size_t i = 0; i < classes.size(); ++i) {
+            nodes[i] = class_symbol_to_id.at(classes[i]);
+        }
+        return class_id_to_symbol[lookup_lca(nodes)];
+    }
 
     void traverse_class_hierarchy(int class_id, int parent_id);
     void check_types() {
@@ -261,6 +260,8 @@ private:
     std::vector<Symbol> class_id_to_symbol;
     std::vector<std::vector<int>> inheritance_graph;
     std::vector<int> parent;
+    std::vector<std::vector<LcaSparseTableNode>> lca_sparse_table;
+    std::vector<int> lca_last_occurence;
     std::vector<std::unordered_map<Symbol, MethodSignature>> class_methods;
     std::vector<std::unordered_map<Symbol, Symbol>> class_attributes;
     Class_ current_class;
@@ -270,7 +271,7 @@ private:
 ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
     build_class_map(classes);
     build_inheritance_graph();
-    fill_parent();
+    precompute_lca_lookup_table();
     collect_methods();
     collect_attributes();
 
@@ -295,6 +296,7 @@ void ClassTable::build_class_map(const Classes classes) {
 
 void ClassTable::build_inheritance_graph() {
     inheritance_graph.resize(class_count());
+    parent.resize(class_count(), kNoParent);
     for (const auto& [name, cls] : class_map) {
         if (name == Object) {
             continue;
@@ -308,39 +310,38 @@ void ClassTable::build_inheritance_graph() {
             semant_error(cls) << "Class " << parent_name << " is non-inheritable and cannot be a parent class." << std::endl;
             continue;
         }
-        inheritance_graph[class_symbol_to_id.at(parent_name)].push_back(class_symbol_to_id.at(name));
+        const auto parent_id = class_symbol_to_id.at(parent_name);
+        const auto class_id = class_symbol_to_id.at(name);
+        inheritance_graph[parent_id].push_back(class_id);
+        parent[class_id] = parent_id;
     }
     std::vector<bool> visited(class_count());
     std::vector<bool> on_stack(class_count());
     std::vector<int> cycle;
-    std::optional<int> cycle_start;
-    auto cycle_check = [&](auto&& cycle_check, int u) -> bool {
+    auto has_cycle = [&](auto&& has_cycle, int u) -> bool {
         if (on_stack[u]) {
-            cycle_start = u;
-            return false;
+            for (auto node = parent[u]; node != u; node = parent[node]) {
+                cycle.push_back(node);
+            }
+            cycle.push_back(u);
+            return true;
         }
         if (visited[u]) {
-            return true;
+            return false;
         }
         visited[u] = true;
         on_stack[u] = true;
         for (const int v : inheritance_graph[u]) {
-            if (!cycle_check(cycle_check, v)) {
+            if (has_cycle(has_cycle, v)) {
                 break;
             }
         }
         on_stack[u] = false;
-        if (cycle_start) {
-            cycle.push_back(u);
-            if (u == cycle_start) {
-                cycle_start.reset();
-            }
-        }
-        return cycle.empty();
+        return !cycle.empty();
     };
     for (int u = 0; u < class_count(); ++u) {
         if (!visited[u]) {
-            if (!cycle_check(cycle_check, u)) {
+            if (has_cycle(has_cycle, u)) {
                 auto& err_stream = semant_error(class_map[class_id_to_symbol[cycle.front()]]);
                 err_stream << "Inheritance graph contains a cycle: ";
                 for (const int u : cycle) {
@@ -351,6 +352,49 @@ void ClassTable::build_inheritance_graph() {
             }
         }
     }
+}
+
+void ClassTable::precompute_lca_lookup_table() {
+    std::vector<int> euler_tour;
+    std::vector<int> depth;
+    lca_last_occurence.resize(class_count());
+    auto dfs = [&](auto&& dfs, int u, int p, int d) -> void {
+        lca_last_occurence[u] = euler_tour.size();
+        euler_tour.push_back(u);
+        depth.push_back(d);
+        for (const int v : inheritance_graph[u]) {
+            if (v != p) {
+                dfs(dfs, v, u, d + 1);
+            }
+        }
+        lca_last_occurence[u] = euler_tour.size();
+        euler_tour.push_back(u);
+        depth.push_back(d);
+    };
+    dfs(dfs, class_symbol_to_id.at(Object), kNoParent, 0);
+    const int euler_tour_sz = euler_tour.size();
+    const int sparse_table_sz = std::bit_width((unsigned)euler_tour_sz);
+    lca_sparse_table.resize(sparse_table_sz, std::vector<LcaSparseTableNode>(euler_tour_sz));
+    for (int i = 0; i < euler_tour_sz; ++i) {
+        lca_sparse_table[0][i] = { depth[i], euler_tour[i] };
+    }
+    for (int i = 1; i < sparse_table_sz; ++i) {
+        const int offset = 1 << (i - 1);
+        for (int j = 0; j + offset < euler_tour_sz; ++j) {
+            lca_sparse_table[i][j] = std::min(lca_sparse_table[i - 1][j], lca_sparse_table[i - 1][j + offset]);
+        }
+    }
+}
+
+int ClassTable::lookup_lca(const std::vector<int>& nodes) {
+    int first_idx = class_count(), last_idx = 0;
+    for (const auto& node : nodes) {
+        first_idx = std::min(first_idx, lca_last_occurence[node]);
+        last_idx = std::max(last_idx, lca_last_occurence[node]);
+    }
+    const auto sparse_table_idx = std::bit_width(last_idx - first_idx + 1u) - 1;
+    const auto offset = (1 << sparse_table_idx) - 1;
+    return std::min(lca_sparse_table[sparse_table_idx][first_idx], lca_sparse_table[sparse_table_idx][last_idx - offset]).node;
 }
 
 void ClassTable::collect_methods(int u, int p) {
@@ -504,6 +548,15 @@ void ClassTable::collect_attributes() {
     }
 }
 
+void assign_class::check_types(TypeChecker& type_checker) {
+}
+
+void static_dispatch_class::check_types(TypeChecker& type_checker) {
+}
+
+void dispatch_class::check_types(TypeChecker& type_checker) {
+}
+
 void cond_class::check_types(TypeChecker& type_checker) {
     pred->check_types(type_checker);
     if (pred->get_type() != Bool) {
@@ -515,7 +568,7 @@ void cond_class::check_types(TypeChecker& type_checker) {
     }
     then_exp->check_types(type_checker);
     else_exp->check_types(type_checker);
-    set_type(type_checker.lub(then_exp->get_type(), else_exp->get_type()));
+    set_type(type_checker.lub({ then_exp->get_type(), else_exp->get_type() }));
 }
 
 void loop_class::check_types(TypeChecker& type_checker) {
@@ -529,6 +582,9 @@ void loop_class::check_types(TypeChecker& type_checker) {
     }
     body->check_types(type_checker);
     set_type(Object);
+}
+
+void typcase_class::check_types(TypeChecker& type_checker) {
 }
 
 void block_class::check_types(TypeChecker& type_checker) {
@@ -709,31 +765,6 @@ void object_class::check_types(TypeChecker& type_checker) {
             type_checker.get_error_stream(this) << "Undeclared identifier: " << name << "." << std::endl;
         }
     }
-}
-
-Symbol ClassTable::lub(const Symbol cls1, const Symbol cls2) {
-    auto class_id1 = class_symbol_to_id.at(cls1);
-    auto class_id2 = class_symbol_to_id.at(cls2);
-    auto depth1 = 0, depth2 = 0;
-    for (int id = class_id1; id != kNoParent; id = parent[id]) {
-        ++depth1;
-    }
-    for (int id = class_id2; id != kNoParent; id = parent[id]) {
-        ++depth2;
-    }
-    if (depth2 > depth1) {
-        std::swap(class_id1, class_id2);
-        std::swap(depth1, depth2);
-    }
-    while (depth1 > depth2) {
-        class_id1 = parent[class_id1];
-        --depth1;
-    }
-    while (class_id1 != class_id2) {
-        class_id1 = parent[class_id1];
-        class_id2 = parent[class_id2];
-    }
-    return class_id1 != kNoParent ? class_id_to_symbol[class_id1] : Object;
 }
 
 void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {

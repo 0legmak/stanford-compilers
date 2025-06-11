@@ -4,6 +4,7 @@
 #ifndef COOL_TREE_HANDCODE_H
 #define COOL_TREE_HANDCODE_H
 
+#include <vector>
 #include <iostream>
 #include "tree.h"
 #include "cool.h"
@@ -53,7 +54,7 @@ public:
 	virtual SymbolTable<Symbol, Entry>& get_symbol_table() = 0;
 	virtual bool has_class(const Symbol class_name) = 0;
 	virtual bool is_class_conformant(const Symbol child_class, const Symbol parent_class) = 0;
-	virtual Symbol lub(const Symbol cls1, const Symbol cls2) = 0;
+	virtual Symbol lub(const std::vector<Symbol>& classes) = 0;
 };
 
 #define Program_EXTRAS                          \
