@@ -227,14 +227,19 @@ private:
     std::ostream& get_error_stream(tree_node* node) override {
         return semant_error(current_class->get_filename(), node);
     }
-	const Class_ get_current_class() override {
-        return current_class;
-    }
 	SymbolTable<Symbol, Entry>& get_symbol_table() override {
         return symbol_table;
     }
- 	bool has_class(const Symbol class_name) override {
-        return class_map.contains(class_name);
+ 	Symbol find_class(const Symbol class_name) override {
+        const auto iter = class_map.find(class_name);
+        return iter != class_map.end() ? iter->second->get_name() : nullptr;
+    }
+ 	std::vector<Symbol> find_method(const Symbol class_name, const Symbol method_name) override {
+        const auto class_id = class_symbol_to_id.at(class_name);
+        if (const auto res = find_method(class_id, method_name)) {
+            return res->signature;
+        }
+        return {};
     }
 	bool is_class_conformant(const Symbol child_class, const Symbol parent_class) override {
         const auto parent_class_id = class_symbol_to_id.at(parent_class);
@@ -271,10 +276,13 @@ private:
 ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) {
     build_class_map(classes);
     build_inheritance_graph();
+    if (semant_errors) {
+        return;
+    }
     precompute_lca_lookup_table();
     collect_methods();
     collect_attributes();
-
+    check_types();
 }
 
 void ClassTable::build_class_map(const Classes classes) {
@@ -507,6 +515,11 @@ void ClassTable::collect_attributes(int u, int p) {
             continue;
         }
         const auto attr_name = feature->get_name();
+        if (attr_name == self) {
+            semant_error(cls->get_filename(), feature)
+                << "Class " << class_symbol << " cannot use self as an attribute name." << std::endl;
+            continue;
+        }
         if (const auto res = find_attribute(u, attr_name)) {
             if (res->class_id == u) {
                 semant_error(cls->get_filename(), feature)
@@ -549,21 +562,117 @@ void ClassTable::collect_attributes() {
 }
 
 void assign_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
+    expr->check_types(type_checker);
+    if (name == self) {
+        type_checker.get_error_stream(this)
+            << "Cannot assign to self." << std::endl;
+        return;
+    }
+    const auto var_type = type_checker.get_symbol_table().lookup(name);
+    if (!var_type) {
+        type_checker.get_error_stream(this)
+            << "Undeclared identifier: " << name << "." << std::endl;
+        return;
+    }
+    if (!type_checker.is_class_conformant(expr->get_type(), var_type)) {
+        type_checker.get_error_stream(this)
+            << "Cannot assign expression of type " << expr->get_type()
+            << " to variable of type " << var_type << "." << std::endl;
+        return;
+    }
+    set_type(expr->get_type());
 }
 
 void static_dispatch_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
+    if (type_name == SELF_TYPE) {
+        type_checker.get_error_stream(this)
+            << "Cannot use SELF_TYPE as a static dispatch type." << std::endl;
+        return;
+    }
+    if (!type_checker.find_class(type_name)) {
+        type_checker.get_error_stream(this)
+            << "Class " << type_name << " is not defined." << std::endl;
+        return;
+    }
+    expr->check_types(type_checker);
+    if (!type_checker.is_class_conformant(expr->get_type(), type_name)) {
+        type_checker.get_error_stream(this)
+            << "Expression of type " << expr->get_type() << " cannot be statically dispatched to class "
+            << type_name << "." << std::endl;
+        return;
+    }
+    std::vector<Symbol> arg_types(actual->len());
+    for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+        const auto arg = actual->nth(i);
+        arg->check_types(type_checker);
+        arg_types[i] = arg->get_type();
+    }
+    const auto method_signature = type_checker.find_method(type_name, name);
+    if (method_signature.empty()) {
+        type_checker.get_error_stream(this)
+            << "Method " << name << " is not defined for class " << expr->get_type() << "." << std::endl;
+        return;
+    }
+    if (method_signature.size() != arg_types.size() + 1) {
+        type_checker.get_error_stream(this)
+            << "Method " << name << " expects " << method_signature.size() - 1
+            << " arguments, but got " << arg_types.size() << "." << std::endl;
+        return;
+    }
+    for (int i = 0; i < actual->len(); ++i) {
+        if (!type_checker.is_class_conformant(arg_types[i], method_signature[i])) {
+            type_checker.get_error_stream(this)
+                << "Argument " << i + 1 << " of method " << name
+                << " is of type " << arg_types[i] << ", but expected type is "
+                << method_signature[i] << "." << std::endl;
+            return;
+        }
+    }
+    set_type(method_signature.back() == SELF_TYPE ? expr->get_type() : method_signature.back());
 }
 
 void dispatch_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
+    expr->check_types(type_checker);
+    std::vector<Symbol> arg_types(actual->len());
+    for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+        const auto arg = actual->nth(i);
+        arg->check_types(type_checker);
+        arg_types[i] = arg->get_type();
+    }
+    const auto method_signature = type_checker.find_method(expr->get_type(), name);
+    if (method_signature.empty()) {
+        type_checker.get_error_stream(this)
+            << "Method " << name << " is not defined for class " << expr->get_type() << "." << std::endl;
+        return;
+    }
+    if (method_signature.size() != arg_types.size() + 1) {
+        type_checker.get_error_stream(this)
+            << "Method " << name << " expects " << method_signature.size() - 1
+            << " arguments, but got " << arg_types.size() << "." << std::endl;
+        return;
+    }
+    for (int i = 0; i < actual->len(); ++i) {
+        if (!type_checker.is_class_conformant(arg_types[i], method_signature[i])) {
+            type_checker.get_error_stream(this)
+                << "Argument " << i + 1 << " of method " << name
+                << " is of type " << arg_types[i] << ", but expected type is "
+                << method_signature[i] << "." << std::endl;
+            return;
+        }
+    }
+    set_type(method_signature.back() == SELF_TYPE ? expr->get_type() : method_signature.back());
 }
 
 void cond_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
     pred->check_types(type_checker);
     if (pred->get_type() != Bool) {
         type_checker.get_error_stream(this)
             << "Predicate in conditional must be of type Bool, but is of type "
             << pred->get_type() << "." << std::endl;
-        set_type(Object);
         return;
     }
     then_exp->check_types(type_checker);
@@ -572,19 +681,63 @@ void cond_class::check_types(TypeChecker& type_checker) {
 }
 
 void loop_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
     pred->check_types(type_checker);
     if (pred->get_type() != Bool) {
         type_checker.get_error_stream(this)
             << "Predicate in loop must be of type Bool, but is of type "
             << pred->get_type() << "." << std::endl;
-        set_type(Object);
         return;
     }
     body->check_types(type_checker);
-    set_type(Object);
+}
+
+CaseTypes branch_class::check_types(TypeChecker& type_checker) {
+    if (name == self) {
+        type_checker.get_error_stream(this)
+            << "Cannot use self as a case branch variable name." << std::endl;
+        return { type_decl, Object };
+    }
+    if (type_decl == SELF_TYPE) {
+        type_checker.get_error_stream(this)
+            << "Cannot use SELF_TYPE as a case branch variable type." << std::endl;
+        return { type_decl, Object };
+    }
+    if (!type_checker.find_class(type_decl)) {
+        type_checker.get_error_stream(this)
+            << "Undeclared class in case branch expression: " << type_decl << "." << std::endl;
+        return { type_decl, Object };
+    }
+    type_checker.get_symbol_table().enterscope();
+    type_checker.get_symbol_table().addid(name, type_decl);
+    expr->check_types(type_checker);
+    type_checker.get_symbol_table().exitscope();
+    if (!type_checker.is_class_conformant(expr->get_type(), type_decl)) {
+        type_checker.get_error_stream(this)
+            << "Expression of type " << expr->get_type()
+            << " does not conform to declared type " << type_decl
+            << " for case branch variable " << name << "." << std::endl;
+        return { type_decl, Object };
+    }
+    return { type_decl, expr->get_type() };
 }
 
 void typcase_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
+    expr->check_types(type_checker);
+    std::unordered_set<Symbol> case_decl_types;
+    std::vector<Symbol> case_expr_types;
+    for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+        const auto cas = cases->nth(i);
+        const auto [case_decl_type, case_expr_type] = cas->check_types(type_checker);
+        if (!case_decl_types.insert(case_decl_type).second) {
+            type_checker.get_error_stream(cas)
+                << "Duplicate case branch for type " << case_decl_type << "." << std::endl;
+            return;
+        }
+        case_expr_types.push_back(case_expr_type);
+    }
+    set_type(type_checker.lub(case_expr_types));
 }
 
 void block_class::check_types(TypeChecker& type_checker) {
@@ -596,30 +749,23 @@ void block_class::check_types(TypeChecker& type_checker) {
 }
 
 void let_class::check_types(TypeChecker& type_checker) {
+    set_type(Object);
     if (identifier == self) {
         type_checker.get_error_stream(this)
             << "Cannot use self as a variable name in let expression." << std::endl;
-        set_type(Object);
         return;
     }
-    Symbol init_type;
-    if (type_decl == SELF_TYPE) {
-        init_type = type_checker.get_current_class()->get_name();
-    } else {
-        if (!type_checker.has_class(type_decl)) {
-            type_checker.get_error_stream(this)
-                << "Undeclared class: " << type_decl << "." << std::endl;
-            set_type(Object);
-            return;
-        }
-        init_type = type_decl;
+    const Symbol init_type = type_checker.find_class(type_decl);
+    if (!init_type) {
+        type_checker.get_error_stream(this)
+            << "Undeclared class: " << type_decl << "." << std::endl;
+        return;
     }
     init->check_types(type_checker);
     if (init->get_type() != No_type && !type_checker.is_class_conformant(init->get_type(), init_type)) {
         type_checker.get_error_stream(this)
             << "Type of initialization expression (" << init->get_type() << ") does not conform to declared type ("
             << type_decl << ") for variable " << identifier << "." << std::endl;
-        set_type(Object);
         return;
     }
     type_checker.get_symbol_table().enterscope();
@@ -632,14 +778,12 @@ void let_class::check_types(TypeChecker& type_checker) {
 Symbol check_types_for_arith(tree_node* node, Expression e1, Expression e2, TypeChecker& type_checker) {
     e1->check_types(type_checker);
     e2->check_types(type_checker);
-    if (e1->get_type() == Int && e2->get_type() == Int) {
-        return Int;
-    } else {
+    if (e1->get_type() != Int || e2->get_type() != Int) {
         type_checker.get_error_stream(node)
             << "Both expressions in arithmetic operation must be of type Int, but are of types "
             << e1->get_type() << " and " << e2->get_type() << "." << std::endl;
-        return Object;
     }
+    return Int;
 }
 
 void plus_class::check_types(TypeChecker& type_checker) {
@@ -659,11 +803,9 @@ void divide_class::check_types(TypeChecker& type_checker) {
 }
 
 void neg_class::check_types(TypeChecker& type_checker) {
+    set_type(Int);
     e1->check_types(type_checker);
-    if (e1->get_type() == Int) {
-        set_type(Int);
-    } else {
-        set_type(Object);
+    if (e1->get_type() != Int) {
         type_checker.get_error_stream(this)
             << "Expression in '~' must be of type Int, but is of type "
             << e1->get_type() << "." << std::endl;
@@ -673,21 +815,24 @@ void neg_class::check_types(TypeChecker& type_checker) {
 Symbol check_types_for_compare(tree_node* node, Expression e1, Expression e2, TypeChecker& type_checker) {
     e1->check_types(type_checker);
     e2->check_types(type_checker);
-    if (e1->get_type() == Int && e2->get_type() == Int) {
-        return Bool;
-    } else {
+    if (e1->get_type() != Int || e2->get_type() != Int) {
         type_checker.get_error_stream(node)
             << "Both expressions in compare operation must be of type Int, but are of types "
             << e1->get_type() << " and " << e2->get_type() << "." << std::endl;
-        return Object;
     }
+    return Bool;
 }
 
 void lt_class::check_types(TypeChecker& type_checker) {
     set_type(check_types_for_compare(this, e1, e2, type_checker));
 }
 
+void leq_class::check_types(TypeChecker& type_checker) {
+    set_type(check_types_for_compare(this, e1, e2, type_checker));
+}
+
 void eq_class::check_types(TypeChecker& type_checker) {
+    set_type(Bool);
     e1->check_types(type_checker);
     e2->check_types(type_checker);  
     auto is_not_freely_comparable = [](const Symbol name) {
@@ -695,28 +840,21 @@ void eq_class::check_types(TypeChecker& type_checker) {
     };
     if (is_not_freely_comparable(e1->get_type()) || is_not_freely_comparable(e2->get_type())) {
         if (e1->get_type() != e2->get_type()) {
-            set_type(Object);
             type_checker.get_error_stream(this)
                 << "Cannot compare types " << e1->get_type() << " and " << e2->get_type() << " for equality." << std::endl;
             return;
         }
     }
-    set_type(Bool);
-}
-
-void leq_class::check_types(TypeChecker& type_checker) {
-    set_type(check_types_for_compare(this, e1, e2, type_checker));
 }
 
 void comp_class::check_types(TypeChecker& type_checker) {
+    set_type(Bool);
     e1->check_types(type_checker);
-    if (e1->get_type() == Bool) {
-        set_type(Bool);
-    } else {
-        set_type(Object);
+    if (e1->get_type() != Bool) {
         type_checker.get_error_stream(this)
             << "Expression in 'not' must be of type Bool, but is of type "
             << e1->get_type() << "." << std::endl;
+        return;
     }
 }
 
@@ -733,15 +871,11 @@ void string_const_class::check_types(TypeChecker& type_checker) {
 }
 
 void new__class::check_types(TypeChecker& type_checker) {
-    if (type_name == SELF_TYPE) {
-        set_type(type_checker.get_current_class()->get_name());
+    if (const auto type = type_checker.find_class(type_name)) {
+        set_type(type);
     } else {
-        if (const auto type = type_checker.has_class(type_name)) {
-            set_type(type_name);
-        } else {
-            set_type(Object);
-            type_checker.get_error_stream(this) << "Undeclared class: " << type_name << "." << std::endl;
-        }
+        set_type(Object);
+        type_checker.get_error_stream(this) << "Undeclared class: " << type_name << "." << std::endl;
     }
 }
 
@@ -755,29 +889,52 @@ void no_expr_class::check_types(TypeChecker& type_checker) {
 }
 
 void object_class::check_types(TypeChecker& type_checker) {
-    if (name == self) {
-        set_type(type_checker.get_current_class()->get_name());
+    if (const auto type = type_checker.get_symbol_table().lookup(name)) {
+        set_type(type);
     } else {
-        if (const auto type = type_checker.get_symbol_table().lookup(name)) {
-            set_type(type);
-        } else {
-            set_type(Object);
-            type_checker.get_error_stream(this) << "Undeclared identifier: " << name << "." << std::endl;
-        }
+        set_type(Object);
+        type_checker.get_error_stream(this) << "Undeclared identifier: " << name << "." << std::endl;
     }
 }
 
 void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
-    const auto saved_current_class = current_class;
-    current_class = class_map[class_id_to_symbol[class_id]];
+    current_class = class_map.at(class_id_to_symbol[class_id]);
+    class_map[SELF_TYPE] = current_class;
     symbol_table.enterscope();
     for (const auto [attr_name, attr_type] : class_attributes[class_id]) {
         symbol_table.addid(attr_name, attr_type);
     }
+    symbol_table.addid(self, current_class->get_name());
     const auto features = current_class->get_features();
     for (int i = features->first(); features->more(i); i = features->next(i)) {
         const auto feature = features->nth(i);
-        feature->get_expr()->check_types(*this);
+        const auto feature_type = find_class(feature->get_type());
+        if (feature->is_method()) {
+            symbol_table.enterscope();
+            const auto formals = feature->get_formals();
+            for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+                const auto formal = formals->nth(j);
+                symbol_table.addid(formal->get_name(), formal->get_type());
+            }
+            feature->get_expr()->check_types(*this);
+            symbol_table.exitscope();
+            if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
+                semant_error(current_class->get_filename(), feature)
+                    << "The method " << feature->get_name() << " in class " << current_class->get_name()
+                    << " has body type " << feature->get_expr()->get_type()
+                    << " which does not conform to its declared return type "
+                    << feature->get_type() << "." << std::endl;
+            }
+        } else {
+            feature->get_expr()->check_types(*this);
+            if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
+                semant_error(current_class->get_filename(), feature)
+                    << "The attribute " << feature->get_name() << " in class " << current_class->get_name()
+                    << " has initialization expression type " << feature->get_expr()->get_type()
+                    << " which does not conform to its declared type "
+                    << feature->get_type() << "." << std::endl;
+            }
+        }
     }
     for (const int child_id : inheritance_graph[class_id]) {
         if (child_id != parent_id) {
@@ -785,7 +942,6 @@ void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
         }
     }
     symbol_table.exitscope();
-    current_class = saved_current_class;
 };
 
 void ClassTable::install_basic_classes() {

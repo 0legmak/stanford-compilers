@@ -50,11 +50,16 @@ class TypeChecker {
 public:
 	virtual ~TypeChecker() {}
     virtual std::ostream& get_error_stream(tree_node* node) = 0;
-	virtual const Class_ get_current_class() = 0;
 	virtual SymbolTable<Symbol, Entry>& get_symbol_table() = 0;
-	virtual bool has_class(const Symbol class_name) = 0;
+	virtual Symbol find_class(const Symbol class_name) = 0;
+	virtual std::vector<Symbol> find_method(const Symbol class_name, const Symbol method_name) = 0;
 	virtual bool is_class_conformant(const Symbol child_class, const Symbol parent_class) = 0;
 	virtual Symbol lub(const std::vector<Symbol>& classes) = 0;
+};
+
+struct CaseTypes {
+	Symbol declared_type;
+	Symbol expr_type;
 };
 
 #define Program_EXTRAS                          \
@@ -117,11 +122,13 @@ Symbol get_type() override; \
 
 
 #define Case_EXTRAS                             \
-virtual void dump_with_types(ostream& ,int) = 0;
+virtual void dump_with_types(ostream& ,int) = 0; \
+virtual CaseTypes check_types(TypeChecker& type_checker) = 0; \
 
 
 #define branch_EXTRAS                                   \
-void dump_with_types(ostream& ,int);
+void dump_with_types(ostream& ,int); \
+CaseTypes check_types(TypeChecker& type_checker) override; \
 
 
 #define Expression_EXTRAS                    \
