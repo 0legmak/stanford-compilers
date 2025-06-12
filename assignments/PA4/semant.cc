@@ -371,13 +371,14 @@ void ClassTable::precompute_lca_lookup_table() {
         euler_tour.push_back(u);
         depth.push_back(d);
         for (const int v : inheritance_graph[u]) {
-            if (v != p) {
-                dfs(dfs, v, u, d + 1);
+            if (v == p) {
+                continue;
             }
+            dfs(dfs, v, u, d + 1);
+            lca_last_occurence[u] = euler_tour.size();
+            euler_tour.push_back(u);
+            depth.push_back(d);
         }
-        lca_last_occurence[u] = euler_tour.size();
-        euler_tour.push_back(u);
-        depth.push_back(d);
     };
     dfs(dfs, class_symbol_to_id.at(Object), kNoParent, 0);
     const int euler_tour_sz = euler_tour.size();
