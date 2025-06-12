@@ -183,12 +183,6 @@ private:
     };
 
     void install_basic_classes();
-    void add_class(const Class_ cls) {
-        const auto name = cls->get_name();
-        if (!class_map.insert({ name, cls }).second) {
-            semant_error(cls) << "Class " << name << " is already defined." << std::endl;
-        }
-    }
     void build_class_map(const Classes classes);
     static bool is_builtin_class(const Symbol name) {
         return name == Object || name == Int || name == Bool || name == Str || name == IO;
@@ -230,9 +224,11 @@ private:
     SymbolTable<Symbol, Entry>& get_symbol_table() override {
         return symbol_table;
     }
-    Symbol find_class(const Symbol class_name) override {
-        const auto iter = class_map.find(class_name);
-        return iter != class_map.end() ? iter->second->get_name() : nullptr;
+    Symbol get_current_class() override {
+        return current_class->get_name();
+    }
+    bool has_class(const Symbol class_name) override {
+        return class_map.contains(class_name);
     }
     std::vector<Symbol> find_method(const Symbol class_name, const Symbol method_name) override {
         const auto class_id = class_symbol_to_id.at(class_name);
@@ -242,13 +238,17 @@ private:
         return {};
     }
     bool is_class_conformant(const Symbol child_class, const Symbol parent_class) override {
+        if (parent_class == SELF_TYPE) {
+            return child_class == SELF_TYPE;
+        }
         const auto parent_class_id = class_symbol_to_id.at(parent_class);
-        return lookup_lca({parent_class_id, class_symbol_to_id.at(child_class)}) == parent_class_id;
+        const auto child_class_id = class_symbol_to_id.at(child_class == SELF_TYPE ? current_class->get_name() : child_class);
+        return lookup_lca({ child_class_id, parent_class_id }) == parent_class_id;
     }
     Symbol lub(const std::vector<Symbol>& classes) override {
         std::vector<int> nodes(classes.size());
         for (size_t i = 0; i < classes.size(); ++i) {
-            nodes[i] = class_symbol_to_id.at(classes[i]);
+            nodes[i] = class_symbol_to_id.at(classes[i] == SELF_TYPE ? current_class->get_name() : classes[i]);
         }
         return class_id_to_symbol[lookup_lca(nodes)];
     }
@@ -288,10 +288,23 @@ ClassTable::ClassTable(Classes classes) : semant_errors(0) , error_stream(cerr) 
 void ClassTable::build_class_map(const Classes classes) {
     install_basic_classes();
     for (int i = classes->first(); classes->more(i); i = classes->next(i)) {
-        add_class(classes->nth(i));
+        const auto cls = classes->nth(i);
+        const auto name = cls->get_name();
+        if (name == SELF_TYPE) {
+            semant_error(cls) << "Class SELF_TYPE is not allowed." << std::endl;
+            continue;
+        }
+        if (is_builtin_class(name)) {
+            semant_error(cls) << "Class " << name << " is a built-in class and cannot be redefined." << std::endl;
+            continue;
+        }
+        if (!class_map.insert({ name, cls }).second) {
+            semant_error(cls) << "Class " << name << " is already defined." << std::endl;
+            continue;
+        }
     }
     if (!class_map.contains(Main)) {
-        semant_error() << "Main class not found in class list." << std::endl;
+        semant_error() << "Class Main is not defined." << std::endl;
     }
     class_id_to_symbol.resize(class_count());
     int class_name_id = 0;
@@ -592,7 +605,7 @@ void static_dispatch_class::check_types(TypeChecker& type_checker) {
             << "Cannot use SELF_TYPE as a static dispatch type." << std::endl;
         return;
     }
-    if (!type_checker.find_class(type_name)) {
+    if (!type_checker.has_class(type_name)) {
         type_checker.get_error_stream(this)
             << "Class " << type_name << " is not defined." << std::endl;
         return;
@@ -643,7 +656,8 @@ void dispatch_class::check_types(TypeChecker& type_checker) {
         arg->check_types(type_checker);
         arg_types[i] = arg->get_type();
     }
-    const auto method_signature = type_checker.find_method(expr->get_type(), name);
+    const auto expr_type = expr->get_type() == SELF_TYPE ? type_checker.get_current_class() : expr->get_type();
+    const auto method_signature = type_checker.find_method(expr_type, name);
     if (method_signature.empty()) {
         type_checker.get_error_stream(this)
             << "Method " << name << " is not defined for class " << expr->get_type() << "." << std::endl;
@@ -704,7 +718,7 @@ CaseTypes branch_class::check_types(TypeChecker& type_checker) {
             << "Cannot use SELF_TYPE as a case branch variable type." << std::endl;
         return { type_decl, Object };
     }
-    if (!type_checker.find_class(type_decl)) {
+    if (!type_checker.has_class(type_decl)) {
         type_checker.get_error_stream(this)
             << "Undeclared class in case branch expression: " << type_decl << "." << std::endl;
         return { type_decl, Object };
@@ -749,21 +763,20 @@ void let_class::check_types(TypeChecker& type_checker) {
             << "Cannot use self as a variable name in let expression." << std::endl;
         return;
     }
-    const Symbol init_type = type_checker.find_class(type_decl);
-    if (!init_type) {
+    if (type_decl != SELF_TYPE && !type_checker.has_class(type_decl)) {
         type_checker.get_error_stream(this)
             << "Undeclared class: " << type_decl << "." << std::endl;
         return;
     }
     init->check_types(type_checker);
-    if (init->get_type() != No_type && !type_checker.is_class_conformant(init->get_type(), init_type)) {
+    if (init->get_type() != No_type && !type_checker.is_class_conformant(init->get_type(), type_decl)) {
         type_checker.get_error_stream(this)
             << "Type of initialization expression (" << init->get_type() << ") does not conform to declared type ("
             << type_decl << ") for variable " << identifier << "." << std::endl;
         return;
     }
     type_checker.get_symbol_table().enterscope();
-    type_checker.get_symbol_table().addid(identifier, init_type);
+    type_checker.get_symbol_table().addid(identifier, type_decl);
     body->check_types(type_checker);
     type_checker.get_symbol_table().exitscope();
     set_type(body->get_type());
@@ -865,8 +878,10 @@ void string_const_class::check_types(TypeChecker& type_checker) {
 }
 
 void new__class::check_types(TypeChecker& type_checker) {
-    if (const auto type = type_checker.find_class(type_name)) {
-        set_type(type);
+    if (type_name == SELF_TYPE) {
+        set_type(SELF_TYPE);
+    } else if (type_checker.has_class(type_name)) {
+        set_type(type_name);
     } else {
         set_type(Object);
         type_checker.get_error_stream(this) << "Undeclared class: " << type_name << "." << std::endl;
@@ -883,7 +898,9 @@ void no_expr_class::check_types(TypeChecker& type_checker) {
 }
 
 void object_class::check_types(TypeChecker& type_checker) {
-    if (const auto type = type_checker.get_symbol_table().lookup(name)) {
+    if (name == self) {
+        set_type(SELF_TYPE);
+    } else if (const auto type = type_checker.get_symbol_table().lookup(name)) {
         set_type(type);
     } else {
         set_type(Object);
@@ -893,17 +910,15 @@ void object_class::check_types(TypeChecker& type_checker) {
 
 void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
     current_class = class_map.at(class_id_to_symbol[class_id]);
-    class_map[SELF_TYPE] = current_class;
     symbol_table.enterscope();
     for (const auto [attr_name, attr_type] : class_attributes[class_id]) {
         symbol_table.addid(attr_name, attr_type);
     }
-    symbol_table.addid(self, current_class->get_name());
     if (!is_builtin_class(current_class->get_name())) {
         const auto features = current_class->get_features();
         for (int i = features->first(); features->more(i); i = features->next(i)) {
             const auto feature = features->nth(i);
-            const auto feature_type = find_class(feature->get_type());
+            const auto feature_type_defined = feature->get_type() == SELF_TYPE || has_class(feature->get_type());
             if (feature->is_method()) {
                 symbol_table.enterscope();
                 const auto formals = feature->get_formals();
@@ -913,7 +928,7 @@ void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
                 }
                 feature->get_expr()->check_types(*this);
                 symbol_table.exitscope();
-                if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
+                if (feature_type_defined && !is_class_conformant(feature->get_expr()->get_type(), feature->get_type())) {
                     semant_error(current_class->get_filename(), feature)
                         << "The method " << feature->get_name() << " in class " << current_class->get_name()
                         << " has body type " << feature->get_expr()->get_type()
@@ -923,7 +938,7 @@ void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
             } else {
                 feature->get_expr()->check_types(*this);
                 const auto init_type = feature->get_expr()->get_type();
-                if (feature_type && init_type != No_type && !is_class_conformant(init_type, feature_type)) {
+                if (feature_type_defined && init_type != No_type && !is_class_conformant(init_type, feature->get_type())) {
                     semant_error(current_class->get_filename(), feature)
                         << "The attribute " << feature->get_name() << " in class " << current_class->get_name()
                         << " has initialization expression type " << feature->get_expr()->get_type()
