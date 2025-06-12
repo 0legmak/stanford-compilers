@@ -227,21 +227,21 @@ private:
     std::ostream& get_error_stream(tree_node* node) override {
         return semant_error(current_class->get_filename(), node);
     }
-	SymbolTable<Symbol, Entry>& get_symbol_table() override {
+    SymbolTable<Symbol, Entry>& get_symbol_table() override {
         return symbol_table;
     }
- 	Symbol find_class(const Symbol class_name) override {
+    Symbol find_class(const Symbol class_name) override {
         const auto iter = class_map.find(class_name);
         return iter != class_map.end() ? iter->second->get_name() : nullptr;
     }
- 	std::vector<Symbol> find_method(const Symbol class_name, const Symbol method_name) override {
+    std::vector<Symbol> find_method(const Symbol class_name, const Symbol method_name) override {
         const auto class_id = class_symbol_to_id.at(class_name);
         if (const auto res = find_method(class_id, method_name)) {
             return res->signature;
         }
         return {};
     }
-	bool is_class_conformant(const Symbol child_class, const Symbol parent_class) override {
+    bool is_class_conformant(const Symbol child_class, const Symbol parent_class) override {
         const auto parent_class_id = class_symbol_to_id.at(parent_class);
         return lookup_lca({parent_class_id, class_symbol_to_id.at(child_class)}) == parent_class_id;
     }
@@ -395,8 +395,8 @@ void ClassTable::precompute_lca_lookup_table() {
 }
 
 int ClassTable::lookup_lca(const std::vector<int>& nodes) {
-    int first_idx = class_count(), last_idx = 0;
-    for (const auto& node : nodes) {
+    int first_idx = lca_sparse_table.front().size(), last_idx = 0;
+    for (const auto node : nodes) {
         first_idx = std::min(first_idx, lca_last_occurence[node]);
         last_idx = std::max(last_idx, lca_last_occurence[node]);
     }
@@ -712,13 +712,6 @@ CaseTypes branch_class::check_types(TypeChecker& type_checker) {
     type_checker.get_symbol_table().addid(name, type_decl);
     expr->check_types(type_checker);
     type_checker.get_symbol_table().exitscope();
-    if (!type_checker.is_class_conformant(expr->get_type(), type_decl)) {
-        type_checker.get_error_stream(this)
-            << "Expression of type " << expr->get_type()
-            << " does not conform to declared type " << type_decl
-            << " for case branch variable " << name << "." << std::endl;
-        return { type_decl, Object };
-    }
     return { type_decl, expr->get_type() };
 }
 
@@ -905,34 +898,37 @@ void ClassTable::traverse_class_hierarchy(int class_id, int parent_id) {
         symbol_table.addid(attr_name, attr_type);
     }
     symbol_table.addid(self, current_class->get_name());
-    const auto features = current_class->get_features();
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-        const auto feature = features->nth(i);
-        const auto feature_type = find_class(feature->get_type());
-        if (feature->is_method()) {
-            symbol_table.enterscope();
-            const auto formals = feature->get_formals();
-            for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-                const auto formal = formals->nth(j);
-                symbol_table.addid(formal->get_name(), formal->get_type());
-            }
-            feature->get_expr()->check_types(*this);
-            symbol_table.exitscope();
-            if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
-                semant_error(current_class->get_filename(), feature)
-                    << "The method " << feature->get_name() << " in class " << current_class->get_name()
-                    << " has body type " << feature->get_expr()->get_type()
-                    << " which does not conform to its declared return type "
-                    << feature->get_type() << "." << std::endl;
-            }
-        } else {
-            feature->get_expr()->check_types(*this);
-            if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
-                semant_error(current_class->get_filename(), feature)
-                    << "The attribute " << feature->get_name() << " in class " << current_class->get_name()
-                    << " has initialization expression type " << feature->get_expr()->get_type()
-                    << " which does not conform to its declared type "
-                    << feature->get_type() << "." << std::endl;
+    if (!is_builtin_class(current_class->get_name())) {
+        const auto features = current_class->get_features();
+        for (int i = features->first(); features->more(i); i = features->next(i)) {
+            const auto feature = features->nth(i);
+            const auto feature_type = find_class(feature->get_type());
+            if (feature->is_method()) {
+                symbol_table.enterscope();
+                const auto formals = feature->get_formals();
+                for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+                    const auto formal = formals->nth(j);
+                    symbol_table.addid(formal->get_name(), formal->get_type());
+                }
+                feature->get_expr()->check_types(*this);
+                symbol_table.exitscope();
+                if (feature_type && !is_class_conformant(feature->get_expr()->get_type(), feature_type)) {
+                    semant_error(current_class->get_filename(), feature)
+                        << "The method " << feature->get_name() << " in class " << current_class->get_name()
+                        << " has body type " << feature->get_expr()->get_type()
+                        << " which does not conform to its declared return type "
+                        << feature->get_type() << "." << std::endl;
+                }
+            } else {
+                feature->get_expr()->check_types(*this);
+                const auto init_type = feature->get_expr()->get_type();
+                if (feature_type && init_type != No_type && !is_class_conformant(init_type, feature_type)) {
+                    semant_error(current_class->get_filename(), feature)
+                        << "The attribute " << feature->get_name() << " in class " << current_class->get_name()
+                        << " has initialization expression type " << feature->get_expr()->get_type()
+                        << " which does not conform to its declared type "
+                        << feature->get_type() << "." << std::endl;
+                }
             }
         }
     }
