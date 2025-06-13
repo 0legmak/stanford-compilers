@@ -376,32 +376,31 @@ void ClassTable::build_inheritance_graph() {
 }
 
 void ClassTable::precompute_lca_lookup_table() {
-    std::vector<int> euler_tour;
-    std::vector<int> depth;
+    const int euler_tour_sz = class_count() + class_count() - 1;
+    const int sparse_table_sz = std::bit_width((unsigned)euler_tour_sz);
+    lca_sparse_table.resize(sparse_table_sz);
+    lca_sparse_table[0].resize(euler_tour_sz);
     lca_last_occurence.resize(class_count());
+    int curr_idx = 0;
     auto dfs = [&](auto&& dfs, int u, int p, int d) -> void {
-        lca_last_occurence[u] = euler_tour.size();
-        euler_tour.push_back(u);
-        depth.push_back(d);
+        auto add_node = [&] {
+            lca_last_occurence[u] = curr_idx;
+            lca_sparse_table[0][curr_idx] = { d, u };
+            ++curr_idx;
+        };
+        add_node();
         for (const int v : inheritance_graph[u]) {
             if (v == p) {
                 continue;
             }
             dfs(dfs, v, u, d + 1);
-            lca_last_occurence[u] = euler_tour.size();
-            euler_tour.push_back(u);
-            depth.push_back(d);
+            add_node();
         }
     };
     dfs(dfs, class_symbol_to_id.at(Object), kNoParent, 0);
-    const int euler_tour_sz = euler_tour.size();
-    const int sparse_table_sz = std::bit_width((unsigned)euler_tour_sz);
-    lca_sparse_table.resize(sparse_table_sz, std::vector<LcaSparseTableNode>(euler_tour_sz));
-    for (int i = 0; i < euler_tour_sz; ++i) {
-        lca_sparse_table[0][i] = { depth[i], euler_tour[i] };
-    }
     for (int i = 1; i < sparse_table_sz; ++i) {
         const int offset = 1 << (i - 1);
+        lca_sparse_table[i].resize(euler_tour_sz - offset);
         for (int j = 0; j + offset < euler_tour_sz; ++j) {
             lca_sparse_table[i][j] = std::min(lca_sparse_table[i - 1][j], lca_sparse_table[i - 1][j + offset]);
         }
