@@ -377,7 +377,7 @@ void ClassTable::build_inheritance_graph() {
 
 void ClassTable::precompute_lca_lookup_table() {
     const int euler_tour_sz = class_count() + class_count() - 1;
-    const int sparse_table_sz = std::bit_width((unsigned)euler_tour_sz);
+    const int sparse_table_sz = std::bit_width(static_cast<unsigned>(euler_tour_sz));
     lca_sparse_table.resize(sparse_table_sz);
     lca_sparse_table[0].resize(euler_tour_sz);
     lca_last_occurence.resize(class_count());
@@ -599,6 +599,13 @@ void assign_class::check_types(TypeChecker& type_checker) {
 
 void static_dispatch_class::check_types(TypeChecker& type_checker) {
     set_type(Object);
+    expr->check_types(type_checker);
+    std::vector<Symbol> arg_types(actual->len());
+    for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+        const auto arg = actual->nth(i);
+        arg->check_types(type_checker);
+        arg_types[i] = arg->get_type();
+    }
     if (type_name == SELF_TYPE) {
         type_checker.get_error_stream(this)
             << "Cannot use SELF_TYPE as a static dispatch type." << std::endl;
@@ -609,18 +616,11 @@ void static_dispatch_class::check_types(TypeChecker& type_checker) {
             << "Class " << type_name << " is not defined." << std::endl;
         return;
     }
-    expr->check_types(type_checker);
     if (!type_checker.is_class_conformant(expr->get_type(), type_name)) {
         type_checker.get_error_stream(this)
             << "Expression of type " << expr->get_type() << " cannot be statically dispatched to class "
             << type_name << "." << std::endl;
         return;
-    }
-    std::vector<Symbol> arg_types(actual->len());
-    for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
-        const auto arg = actual->nth(i);
-        arg->check_types(type_checker);
-        arg_types[i] = arg->get_type();
     }
     const auto method_signature = type_checker.find_method(type_name, name);
     if (method_signature.empty()) {
@@ -683,30 +683,34 @@ void dispatch_class::check_types(TypeChecker& type_checker) {
 void cond_class::check_types(TypeChecker& type_checker) {
     set_type(Object);
     pred->check_types(type_checker);
+    then_exp->check_types(type_checker);
+    else_exp->check_types(type_checker);
     if (pred->get_type() != Bool) {
         type_checker.get_error_stream(this)
             << "Predicate in conditional must be of type Bool, but is of type "
             << pred->get_type() << "." << std::endl;
         return;
     }
-    then_exp->check_types(type_checker);
-    else_exp->check_types(type_checker);
     set_type(type_checker.lub({ then_exp->get_type(), else_exp->get_type() }));
 }
 
 void loop_class::check_types(TypeChecker& type_checker) {
     set_type(Object);
     pred->check_types(type_checker);
+    body->check_types(type_checker);
     if (pred->get_type() != Bool) {
         type_checker.get_error_stream(this)
             << "Predicate in loop must be of type Bool, but is of type "
             << pred->get_type() << "." << std::endl;
         return;
     }
-    body->check_types(type_checker);
 }
 
 CaseTypes branch_class::check_types(TypeChecker& type_checker) {
+    type_checker.get_symbol_table().enterscope();
+    type_checker.get_symbol_table().addid(name, type_decl);
+    expr->check_types(type_checker);
+    type_checker.get_symbol_table().exitscope();
     if (name == self) {
         type_checker.get_error_stream(this)
             << "Cannot use self as a case branch variable name." << std::endl;
@@ -722,10 +726,6 @@ CaseTypes branch_class::check_types(TypeChecker& type_checker) {
             << "Undeclared class in case branch expression: " << type_decl << "." << std::endl;
         return { type_decl, Object };
     }
-    type_checker.get_symbol_table().enterscope();
-    type_checker.get_symbol_table().addid(name, type_decl);
-    expr->check_types(type_checker);
-    type_checker.get_symbol_table().exitscope();
     return { type_decl, expr->get_type() };
 }
 
@@ -740,9 +740,11 @@ void typcase_class::check_types(TypeChecker& type_checker) {
         if (!case_decl_types.insert(case_decl_type).second) {
             type_checker.get_error_stream(cas)
                 << "Duplicate case branch for type " << case_decl_type << "." << std::endl;
-            return;
         }
         case_expr_types.push_back(case_expr_type);
+    }
+    if (static_cast<int>(case_decl_types.size()) != cases->len()) {
+        return;
     }
     set_type(type_checker.lub(case_expr_types));
 }
@@ -757,6 +759,11 @@ void block_class::check_types(TypeChecker& type_checker) {
 
 void let_class::check_types(TypeChecker& type_checker) {
     set_type(Object);
+    init->check_types(type_checker);
+    type_checker.get_symbol_table().enterscope();
+    type_checker.get_symbol_table().addid(identifier, type_decl);
+    body->check_types(type_checker);
+    type_checker.get_symbol_table().exitscope();
     if (identifier == self) {
         type_checker.get_error_stream(this)
             << "Cannot use self as a variable name in let expression." << std::endl;
@@ -767,17 +774,12 @@ void let_class::check_types(TypeChecker& type_checker) {
             << "Undeclared class: " << type_decl << "." << std::endl;
         return;
     }
-    init->check_types(type_checker);
     if (init->get_type() != No_type && !type_checker.is_class_conformant(init->get_type(), type_decl)) {
         type_checker.get_error_stream(this)
             << "Type of initialization expression (" << init->get_type() << ") does not conform to declared type ("
             << type_decl << ") for variable " << identifier << "." << std::endl;
         return;
     }
-    type_checker.get_symbol_table().enterscope();
-    type_checker.get_symbol_table().addid(identifier, type_decl);
-    body->check_types(type_checker);
-    type_checker.get_symbol_table().exitscope();
     set_type(body->get_type());
 }
 
