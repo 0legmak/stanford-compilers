@@ -32,6 +32,7 @@ private:
    void code_select_gc();
    void code_constants();
    void code_dispatch_table();
+   void code_class_name_table();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as
@@ -43,6 +44,7 @@ private:
    void install_classes(Classes cs);
    void build_inheritance_tree();
    void set_relations(CgenNodeP nd);
+   void assign_class_tags();
 public:
    CgenClassTable(Classes, ostream& str);
    void code();

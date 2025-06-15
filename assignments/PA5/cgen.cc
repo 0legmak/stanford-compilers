@@ -499,10 +499,6 @@ void BoolConst::code_def(ostream& s, int boolclasstag)
       s << WORD << val << ENDL;                             // value (0 or 1)
 }
 
-int Entry::get_index() const {
-  return index;
-}
-
 bool method_class::is_method() {
   return true;
 }
@@ -653,6 +649,16 @@ void CgenClassTable::code_dispatch_table() {
   }
 }
 
+void CgenClassTable::code_class_name_table() {
+  str << CLASSNAMETAB << LABEL;
+  for (List<CgenNode>* l = nds; l; l = l->tl()) {
+    CgenNode* node = l->hd();
+    str << WORD;
+    stringtable.lookup_string(node->get_name()->get_string())->code_ref(str);
+    str << ENDL;
+  }
+}
+
 //********************************************************
 //
 // Emit code to reserve space for and initialize all of
@@ -682,15 +688,12 @@ void CgenClassTable::code_constants()
 
 CgenClassTable::CgenClassTable(Classes classes, ostream& s) : nds(NULL) , str(s)
 {
-   stringclasstag = Str->get_index(); /* Change to your String class tag here */;
-   intclasstag =    Int->get_index(); /* Change to your Int class tag here */;
-   boolclasstag =   Bool->get_index(); /* Change to your Bool class tag here */;
-
    enterscope();
    if (cgen_debug) cout << "Building CgenClassTable" << endl;
    install_basic_classes();
    install_classes(classes);
    build_inheritance_tree();
+   assign_class_tags();
 
    code();
    exitscope();
@@ -878,6 +881,20 @@ void CgenNode::set_parentnd(CgenNodeP p)
   parentnd = p;
 }
 
+void CgenClassTable::assign_class_tags() {
+  int index = 0;
+  for (List<CgenNode>* l = nds; l; l = l->tl()) {
+    CgenNode* node = l->hd();
+    if (node->get_name() == Str) {
+      stringclasstag = index;
+    } else if (node->get_name() == Int) {
+      intclasstag = index;
+    } else if (node->get_name() == Bool) {
+      boolclasstag = index;
+    }
+    ++index;
+  }
+}
 
 
 void CgenClassTable::code()
@@ -897,6 +914,7 @@ void CgenClassTable::code()
 //                   - dispatch tables
 //
   code_dispatch_table();
+  code_class_name_table();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
