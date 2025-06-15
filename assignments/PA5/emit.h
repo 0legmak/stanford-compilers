@@ -31,7 +31,7 @@
 #define METHOD_SEP           "."
 #define CLASSINIT_SUFFIX     "_init"
 #define PROTOBJ_SUFFIX       "_protObj"
-#define OBJECTPROTOBJ        "Object"PROTOBJ_SUFFIX
+#define OBJECTPROTOBJ        "Object" PROTOBJ_SUFFIX
 #define INTCONST_PREFIX      "int_const"
 #define STRCONST_PREFIX      "str_const"
 #define BOOLCONST_PREFIX     "bool_const"
@@ -39,6 +39,7 @@
 
 #define EMPTYSLOT            0
 #define LABEL                ":\n"
+#define ENDL                 "\n"
 
 #define STRINGNAME (char *) "String"
 #define INTNAME    (char *) "Int"
@@ -80,7 +81,7 @@
 //
 #define JALR  "\tjalr\t"  
 #define JAL   "\tjal\t"                 
-#define RET   "\tjr\t"RA"\t"
+#define RET   "\tjr\t" RA "\t"
 
 #define SW    "\tsw\t"
 #define LW    "\tlw\t"

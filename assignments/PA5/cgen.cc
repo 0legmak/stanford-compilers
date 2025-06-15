@@ -394,18 +394,19 @@ void StringEntry::code_def(ostream& s, int stringclasstag)
   IntEntryP lensym = inttable.add_int(len);
 
   // Add -1 eye catcher
-  s << WORD << "-1" << endl;
+  s << WORD << "-1" << ENDL;
 
   code_ref(s);  s  << LABEL                                             // label
-      << WORD << stringclasstag << endl                                 // tag
-      << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << endl // size
+      << WORD << stringclasstag << ENDL                                 // tag
+      << WORD << (DEFAULT_OBJFIELDS + STRING_SLOTS + (len+4)/4) << ENDL // size
       << WORD;
 
 
  /***** Add dispatch information for class String ******/
 
-      s << endl;                                              // dispatch table
-      s << WORD;  lensym->code_ref(s);  s << endl;            // string length
+      emit_disptable_ref(Str, s);                             // dispatch table
+      s << ENDL;
+      s << WORD;  lensym->code_ref(s);  s << ENDL;            // string length
   emit_string_constant(s,str);                                // ascii string
   s << ALIGN;                                                 // align to word
 }
@@ -437,17 +438,18 @@ void IntEntry::code_ref(ostream &s)
 void IntEntry::code_def(ostream &s, int intclasstag)
 {
   // Add -1 eye catcher
-  s << WORD << "-1" << endl;
+  s << WORD << "-1" << ENDL;
 
   code_ref(s);  s << LABEL                                // label
-      << WORD << intclasstag << endl                      // class tag
-      << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << endl  // object size
+      << WORD << intclasstag << ENDL                      // class tag
+      << WORD << (DEFAULT_OBJFIELDS + INT_SLOTS) << ENDL  // object size
       << WORD; 
 
  /***** Add dispatch information for class Int ******/
 
-      s << endl;                                          // dispatch table
-      s << WORD << str << endl;                           // integer value
+      emit_disptable_ref(Int, s);                         // dispatch table
+      s << ENDL;
+      s << WORD << str << ENDL;                           // integer value
 }
 
 
@@ -481,18 +483,32 @@ void BoolConst::code_ref(ostream& s) const
 void BoolConst::code_def(ostream& s, int boolclasstag)
 {
   // Add -1 eye catcher
-  s << WORD << "-1" << endl;
+  s << WORD << "-1" << ENDL;
 
   code_ref(s);  s << LABEL                                  // label
-      << WORD << boolclasstag << endl                       // class tag
-      << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << endl   // object size
+      << WORD << boolclasstag << ENDL                       // class tag
+      << WORD << (DEFAULT_OBJFIELDS + BOOL_SLOTS) << ENDL   // object size
       << WORD;
 
  /***** Add dispatch information for class Bool ******/
 
-      s << endl;                                            // dispatch table
-      s << WORD << val << endl;                             // value (0 or 1)
+      emit_disptable_ref(Bool, s);                          // dispatch table
+      s << ENDL;
+      s << WORD << val << ENDL;                             // value (0 or 1)
 }
+
+int Entry::get_index() const {
+  return index;
+}
+
+bool method_class::is_method() {
+  return true;
+}
+
+bool attr_class::is_method() {
+  return false;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -589,6 +605,29 @@ void CgenClassTable::code_select_gc()
   str << WORD << (cgen_Memmgr_Test == GC_TEST) << endl;
 }
 
+void CgenClassTable::code_dispatch_table() {
+  for (List<CgenNode>* l = nds; l; l = l->tl()) {
+    CgenNode* node = l->hd();
+    emit_disptable_ref(node->get_name(), str);
+    str << LABEL;
+    auto enum_methods = [&](auto&& enum_methods, CgenNode* node) -> void {
+      if (!node) {
+        return;
+      }
+      enum_methods(enum_methods, node->get_parentnd());
+      const auto features = node->get_features();
+      for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (feature->is_method()) {
+          str << WORD;
+          emit_method_ref(node->get_name(), feature->get_name(), str);
+          str << ENDL;
+        }
+      }
+    };
+    enum_methods(enum_methods, node);
+  }
+}
 
 //********************************************************
 //
@@ -619,9 +658,9 @@ void CgenClassTable::code_constants()
 
 CgenClassTable::CgenClassTable(Classes classes, ostream& s) : nds(NULL) , str(s)
 {
-   stringclasstag = 0 /* Change to your String class tag here */;
-   intclasstag =    0 /* Change to your Int class tag here */;
-   boolclasstag =   0 /* Change to your Bool class tag here */;
+   stringclasstag = Str->get_index(); /* Change to your String class tag here */;
+   intclasstag =    Int->get_index(); /* Change to your Int class tag here */;
+   boolclasstag =   Bool->get_index(); /* Change to your Bool class tag here */;
 
    enterscope();
    if (cgen_debug) cout << "Building CgenClassTable" << endl;
@@ -833,6 +872,7 @@ void CgenClassTable::code()
 //                   - class_nameTab
 //                   - dispatch tables
 //
+  code_dispatch_table();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
