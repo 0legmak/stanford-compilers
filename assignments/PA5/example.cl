@@ -3,7 +3,13 @@
     as possible.
  *)
 
-class Main {
+class B {
+  f() : Int { 0 };
+  g() : Int { 0 };
+};
+
+class Main inherits B {
+  f() : Int { 1 };
   main():Int { 0 };
 };
 

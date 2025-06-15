@@ -24,6 +24,8 @@
 
 #include "cgen.h"
 #include "cgen_gc.h"
+#include <unordered_map>
+#include <vector>
 
 extern void emit_string_constant(ostream& str, char *s);
 extern int cgen_debug;
@@ -610,6 +612,12 @@ void CgenClassTable::code_dispatch_table() {
     CgenNode* node = l->hd();
     emit_disptable_ref(node->get_name(), str);
     str << LABEL;
+    int method_index = 0;
+    struct MethodEntry {
+      Symbol class_name;
+      int index;
+    };
+    std::unordered_map<Symbol, MethodEntry> methods;
     auto enum_methods = [&](auto&& enum_methods, CgenNode* node) -> void {
       if (!node) {
         return;
@@ -619,13 +627,29 @@ void CgenClassTable::code_dispatch_table() {
       for (int i = features->first(); features->more(i); i = features->next(i)) {
         const auto feature = features->nth(i);
         if (feature->is_method()) {
-          str << WORD;
-          emit_method_ref(node->get_name(), feature->get_name(), str);
-          str << ENDL;
+          if (auto insert_res = methods.insert({ feature->get_name(), { node->get_name(), method_index } }); insert_res.second) {
+            ++method_index;
+          } else {
+            insert_res.first->second.class_name = node->get_name();
+          }
         }
       }
     };
     enum_methods(enum_methods, node);
+    struct MethodEntry2 {
+      Symbol class_name;
+      Symbol method_name;
+    };
+    std::vector<MethodEntry2> methods2(methods.size());
+    for (const auto& [method_name, method_entry] : methods) {
+      const auto& [class_name, method_index] = method_entry;
+      methods2[method_index] = { class_name, method_name };
+    }
+    for (const auto& [class_name, method_name] : methods2) {
+      str << WORD;
+      emit_method_ref(class_name, method_name, str);
+      str << ENDL;
+    }
   }
 }
 
