@@ -58,6 +58,7 @@ private:
    List<CgenNode> *children;                  // Children of class
    Basicness basic_status;                    // `Basic' if class is basic
                                               // `NotBasic' otherwise
+   int class_tag;
 
 public:
    CgenNode(Class_ c,
@@ -69,6 +70,8 @@ public:
    void set_parentnd(CgenNodeP p);
    CgenNodeP get_parentnd() { return parentnd; }
    int basic() { return (basic_status == Basic); }
+   void set_class_tag(int tag) { class_tag = tag; }
+   int get_class_tag() const { return class_tag; }
 };
 
 class BoolConst 

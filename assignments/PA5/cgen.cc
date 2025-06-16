@@ -24,6 +24,7 @@
 
 #include "cgen.h"
 #include "cgen_gc.h"
+#include <stack>
 #include <unordered_map>
 #include <vector>
 
@@ -604,57 +605,82 @@ void CgenClassTable::code_select_gc()
 }
 
 void CgenClassTable::code_dispatch_table() {
-  for (List<CgenNode>* l = nds; l; l = l->tl()) {
-    CgenNode* node = l->hd();
-    emit_disptable_ref(node->get_name(), str);
-    str << LABEL;
-    int method_index = 0;
-    struct MethodEntry {
-      Symbol class_name;
-      int index;
-    };
-    std::unordered_map<Symbol, MethodEntry> methods;
-    auto enum_methods = [&](auto&& enum_methods, CgenNode* node) -> void {
-      if (!node) {
-        return;
+  std::unordered_map<Symbol, int> method_to_index;
+  struct DispTableEntry {
+    Symbol class_name;
+    Symbol method_name;
+  };
+  std::vector<DispTableEntry> disp_table;
+  enum UndoAction {
+    kAddEntry,
+    kUpdateEntry
+  };
+  struct UndoRecord {
+    UndoAction action;
+    int disp_table_index;
+    Symbol prev_class_name;
+  };
+  std::stack<UndoRecord> undo_stack;
+  auto enum_methods = [&](auto&& enum_methods, CgenNode* node) -> void {
+    const auto class_name = node->get_name();
+    const auto features = node->get_features();
+    const auto prev_stack_size = undo_stack.size();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+      const auto feature = features->nth(i);
+      if (!feature->is_method()) {
+        continue;
       }
-      enum_methods(enum_methods, node->get_parentnd());
-      const auto features = node->get_features();
-      for (int i = features->first(); features->more(i); i = features->next(i)) {
-        const auto feature = features->nth(i);
-        if (feature->is_method()) {
-          if (auto insert_res = methods.insert({ feature->get_name(), { node->get_name(), method_index } }); insert_res.second) {
-            ++method_index;
-          } else {
-            insert_res.first->second.class_name = node->get_name();
-          }
-        }
+      const auto method_name = feature->get_name();
+      int disp_table_index = disp_table.size();
+      if (auto ins_res = method_to_index.insert({ method_name, disp_table_index }); ins_res.second) {
+        undo_stack.push({ kAddEntry });
+        disp_table.push_back({ class_name, method_name });
+      } else {
+        disp_table_index = ins_res.first->second;
+        undo_stack.push({ kUpdateEntry, disp_table_index, disp_table[disp_table_index].class_name });
+        disp_table[disp_table_index].class_name = class_name;
       }
-    };
-    enum_methods(enum_methods, node);
-    struct MethodEntry2 {
-      Symbol class_name;
-      Symbol method_name;
-    };
-    std::vector<MethodEntry2> methods2(methods.size());
-    for (const auto& [method_name, method_entry] : methods) {
-      const auto& [class_name, method_index] = method_entry;
-      methods2[method_index] = { class_name, method_name };
     }
-    for (const auto& [class_name, method_name] : methods2) {
+
+    emit_disptable_ref(class_name, str);
+    str << LABEL;
+    for (const auto& [class_name, method_name] : disp_table) {
       str << WORD;
       emit_method_ref(class_name, method_name, str);
       str << ENDL;
     }
-  }
+
+    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
+      enum_methods(enum_methods, child->hd());
+    }
+
+    while (undo_stack.size() != prev_stack_size) {
+      const auto& undo_record = undo_stack.top();
+      switch (undo_record.action) {
+        case kAddEntry:
+          method_to_index.erase(disp_table.back().method_name);
+          disp_table.pop_back();
+          break;
+        case kUpdateEntry:
+          disp_table[undo_record.disp_table_index].class_name = undo_record.prev_class_name;
+          break;
+      }
+      undo_stack.pop();
+    }
+  };
+  enum_methods(enum_methods, root());
 }
 
 void CgenClassTable::code_class_name_table() {
-  str << CLASSNAMETAB << LABEL;
+  std::vector<StringEntryP> class_table(list_length(nds));
   for (List<CgenNode>* l = nds; l; l = l->tl()) {
     CgenNode* node = l->hd();
+    class_table[node->get_class_tag()] = stringtable.lookup_string(node->get_name()->get_string());
+  }
+  str << CLASSNAMETAB << LABEL;
+  for (const auto entry : class_table) {
     str << WORD;
-    stringtable.lookup_string(node->get_name()->get_string())->code_ref(str);
+    entry->code_ref(str);
     str << ENDL;
   }
 }
@@ -882,18 +908,14 @@ void CgenNode::set_parentnd(CgenNodeP p)
 }
 
 void CgenClassTable::assign_class_tags() {
-  int index = 0;
+  int class_tag = 0;
   for (List<CgenNode>* l = nds; l; l = l->tl()) {
     CgenNode* node = l->hd();
-    if (node->get_name() == Str) {
-      stringclasstag = index;
-    } else if (node->get_name() == Int) {
-      intclasstag = index;
-    } else if (node->get_name() == Bool) {
-      boolclasstag = index;
-    }
-    ++index;
+    node->set_class_tag(class_tag++);
   }
+  stringclasstag = probe(Str)->get_class_tag();
+  intclasstag = probe(Int)->get_class_tag();
+  boolclasstag = probe(Bool)->get_class_tag();
 }
 
 
@@ -943,7 +965,8 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct) :
    class__class((const class__class &) *nd),
    parentnd(NULL),
    children(NULL),
-   basic_status(bstatus)
+   basic_status(bstatus),
+   class_tag(-1)
 { 
    stringtable.add_string(name->get_string());          // Add class name to string table
 }

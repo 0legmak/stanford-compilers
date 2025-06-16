@@ -8,7 +8,11 @@ class B {
   g() : Int { 0 };
 };
 
-class Main inherits B {
+class C inherits B {
+  g() : Int { 1 };
+};
+
+class Main inherits C {
   f() : Int { 1 };
   main():Int { 0 };
 };
