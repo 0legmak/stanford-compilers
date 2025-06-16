@@ -3,6 +3,7 @@
 #include "emit.h"
 #include "cool-tree.h"
 #include "symtab.h"
+#include <unordered_map>
 
 enum Basicness     {Basic, NotBasic};
 #define TRUE 1
@@ -14,7 +15,7 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenNode;
 typedef CgenNode *CgenNodeP;
 
-class CgenClassTable : public SymbolTable<Symbol,CgenNode> {
+class CgenClassTable : public SymbolTable<Symbol,CgenNode>, public CodeGenerator {
 private:
    List<CgenNode> *nds;
    ostream& str;
@@ -23,6 +24,15 @@ private:
    int boolclasstag = -1;
    StringEntry* empty_string = nullptr;
    IntEntry* zero_int = nullptr;
+   
+   std::unordered_map<Symbol, SymbolLocation> symbol_environment;
+   int curr_fp_offset = 0;
+   int label_id = 0;
+   SymbolLocation get_symbol_location(Symbol name) override;
+   int get_label() override;
+   void push(char* reg) override;
+   void pop(char* reg) override;
+
 
 // The following methods emit code for
 // constants and global declarations.
@@ -33,7 +43,8 @@ private:
    void code_select_gc();
    void code_constants();
    void code_dispatch_table_and_prototype_objects();
-   void code_class_name_table();
+   void code_class_name_and_object_tables();
+   void code_methods();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as

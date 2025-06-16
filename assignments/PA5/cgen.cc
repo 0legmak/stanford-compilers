@@ -25,7 +25,6 @@
 #include "cgen.h"
 #include "cgen_gc.h"
 #include <stack>
-#include <unordered_map>
 #include <vector>
 
 extern void emit_string_constant(ostream& str, char *s);
@@ -325,6 +324,12 @@ static void emit_push(char *reg, ostream& str)
   emit_addiu(SP,SP,-4,str);
 }
 
+static void emit_pop(char *reg, ostream& str)
+{
+  emit_addiu(SP, SP, WORD_SIZE, str);
+  emit_load(reg, 0, SP, str);
+}
+
 //
 // Fetch the integer value in an Int object.
 // Emits code to fetch the integer value of the Integer object pointed
@@ -516,6 +521,14 @@ Symbol attr_class::get_type() {
   return type_decl;
 }
 
+Expression method_class::get_expr() {
+  return expr;
+}
+
+Expression attr_class::get_expr() {
+  return init;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -699,16 +712,65 @@ void CgenClassTable::code_dispatch_table_and_prototype_objects() {
   process_class(process_class, root());
 }
 
-void CgenClassTable::code_class_name_table() {
-  std::vector<StringEntryP> class_table(list_length(nds));
+void CgenClassTable::code_class_name_and_object_tables() {
+  const int list_size = list_length(nds);
+  std::vector<StringEntryP> class_str_table(list_size);
+  std::vector<Symbol> class_sym_table(list_size);
   for (List<CgenNode>* l = nds; l; l = l->tl()) {
     CgenNode* node = l->hd();
-    class_table[node->get_class_tag()] = stringtable.lookup_string(node->get_name()->get_string());
+    class_str_table[node->get_class_tag()] = stringtable.lookup_string(node->get_name()->get_string());
+    class_sym_table[node->get_class_tag()] = node->get_name();
   }
   str << CLASSNAMETAB << LABEL;
-  for (const auto entry : class_table) {
+  for (const auto entry : class_str_table) {
     str << WORD; entry->code_ref(str); str << ENDL;
   }
+  str << CLASSOBJTAB << LABEL;
+  for (const auto entry : class_sym_table) {
+    str << WORD; emit_protobj_ref(entry, str); str << ENDL;
+    str << WORD; emit_init_ref(entry, str); str << ENDL;
+  }
+}
+
+void CgenClassTable::code_methods() {
+  std::vector<Expression> attr_exprs;
+  auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
+    const auto class_name = node->get_name();
+    const auto features = node->get_features();
+    const auto prev_attr_exprs_size = attr_exprs.size();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+      const auto feature = features->nth(i);
+      if (feature->is_method()) {
+      } else {
+        attr_exprs.push_back(feature->get_expr());
+        symbol_environment[feature->get_name()] = { SELF, DEFAULT_OBJFIELDS + i };
+      }
+    }
+
+    emit_init_ref(class_name, str); str << LABEL;
+    push(FP);
+    emit_addiu(FP, SP, WORD_SIZE, str);
+    push(RA);
+    push(SELF);
+    emit_move(SELF, ACC, str);
+    for (size_t i = 0; i < attr_exprs.size(); ++i) {
+      if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
+        attr_exprs[i]->code(str, *this);
+        emit_store(ACC, DEFAULT_OBJFIELDS + i, SELF, str);
+      }
+    }
+    pop(SELF);
+    pop(RA);
+    pop(FP);
+    emit_return(str);
+
+    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
+      process_class(process_class, child->hd());
+    }
+
+    attr_exprs.resize(prev_attr_exprs_size);
+  };
+  process_class(process_class, root());
 }
 
 //********************************************************
@@ -962,7 +1024,7 @@ void CgenClassTable::code()
 //                   - dispatch tables
 //
   code_dispatch_table_and_prototype_objects();
-  code_class_name_table();
+  code_class_name_and_object_tables();
 
   if (cgen_debug) cout << "coding global text" << endl;
   code_global_text();
@@ -971,7 +1033,7 @@ void CgenClassTable::code()
 //                   - object initializer
 //                   - the class methods
 //                   - etc...
-
+  code_methods();
 }
 
 
@@ -1008,58 +1070,76 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct) :
 //
 //*****************************************************************
 
-void assign_class::code(ostream &s) {
+SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
+  return symbol_environment.at(name);
 }
 
-void static_dispatch_class::code(ostream &s) {
+int CgenClassTable::get_label() {
+  return label_id++;
 }
 
-void dispatch_class::code(ostream &s) {
+void CgenClassTable::push(char* reg) {
+    emit_push(reg, str);
+    --curr_fp_offset;
 }
 
-void cond_class::code(ostream &s) {
+void CgenClassTable::pop(char* reg) {
+    emit_pop(reg, str);
+    ++curr_fp_offset;
 }
 
-void loop_class::code(ostream &s) {
+void assign_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void typcase_class::code(ostream &s) {
+void static_dispatch_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void block_class::code(ostream &s) {
+void dispatch_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void let_class::code(ostream &s) {
+void cond_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void plus_class::code(ostream &s) {
+void loop_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void sub_class::code(ostream &s) {
+void typcase_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void mul_class::code(ostream &s) {
+void block_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void divide_class::code(ostream &s) {
+void let_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void neg_class::code(ostream &s) {
+void plus_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void lt_class::code(ostream &s) {
+void sub_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void eq_class::code(ostream &s) {
+void mul_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void leq_class::code(ostream &s) {
+void divide_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void comp_class::code(ostream &s) {
+void neg_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void int_const_class::code(ostream& s)  
+void lt_class::code(ostream &s, CodeGenerator& codegen) {
+}
+
+void eq_class::code(ostream &s, CodeGenerator& codegen) {
+}
+
+void leq_class::code(ostream &s, CodeGenerator& codegen) {
+}
+
+void comp_class::code(ostream &s, CodeGenerator& codegen) {
+}
+
+void int_const_class::code(ostream& s, CodeGenerator& codegen)  
 {
   //
   // Need to be sure we have an IntEntry *, not an arbitrary Symbol
@@ -1067,26 +1147,57 @@ void int_const_class::code(ostream& s)
   emit_load_int(ACC,inttable.lookup_string(token->get_string()),s);
 }
 
-void string_const_class::code(ostream& s)
+void string_const_class::code(ostream& s, CodeGenerator& codegen)
 {
   emit_load_string(ACC,stringtable.lookup_string(token->get_string()),s);
 }
 
-void bool_const_class::code(ostream& s)
+void bool_const_class::code(ostream& s, CodeGenerator& codegen)
 {
   emit_load_bool(ACC, BoolConst(val), s);
 }
 
-void new__class::code(ostream &s) {
+void new__class::code(ostream &s, CodeGenerator& codegen) {
+  if (type_name == SELF_TYPE) {
+    emit_load_address(T1, CLASSOBJTAB, s);
+    emit_load(T2, TAG_OFFSET, SELF, s);
+    emit_sll(T2, T2, 3, s);
+    emit_add(T1, T1, T2, s);
+    emit_load(ACC, 4, T1, s);
+    codegen.push(ACC);
+    emit_load(ACC, 0, T1, s);
+    emit_jal("Object.copy", s);
+    codegen.pop(T1);
+    emit_jalr(T1, s);
+  } else {
+    emit_partial_load_address(ACC, s); emit_protobj_ref(type_name, s); s << ENDL;
+    emit_jal("Object.copy", s);
+    s << JAL; emit_init_ref(type_name, s); s << ENDL;
+  }
 }
 
-void isvoid_class::code(ostream &s) {
+void isvoid_class::code(ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  const auto label_if_zero = codegen.get_label();
+  const auto label_end = codegen.get_label();
+  emit_beqz(ACC, label_if_zero, s);
+  emit_load_bool(ACC, falsebool, s);
+  emit_branch(label_end, s);
+  emit_label_def(label_if_zero, s);
+  emit_load_bool(ACC, truebool, s);
+  emit_label_def(label_end, s);
 }
 
-void no_expr_class::code(ostream &s) {
+void no_expr_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
-void object_class::code(ostream &s) {
+void object_class::code(ostream &s, CodeGenerator& codegen) {
+  if (name == self) {
+    emit_move(ACC, SELF, s);
+  } else {
+    const auto [reg, offset] = codegen.get_symbol_location(name);
+    emit_load(ACC, offset, reg, s);
+  }
 }
 
 
