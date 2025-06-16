@@ -508,6 +508,14 @@ bool attr_class::is_method() {
   return false;
 }
 
+Symbol method_class::get_type() {
+  return return_type;
+}
+
+Symbol attr_class::get_type() {
+  return type_decl;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -604,7 +612,7 @@ void CgenClassTable::code_select_gc()
   str << WORD << (cgen_Memmgr_Test == GC_TEST) << endl;
 }
 
-void CgenClassTable::code_dispatch_table() {
+void CgenClassTable::code_dispatch_table_and_prototype_objects() {
   std::unordered_map<Symbol, int> method_to_index;
   struct DispTableEntry {
     Symbol class_name;
@@ -621,40 +629,60 @@ void CgenClassTable::code_dispatch_table() {
     Symbol prev_class_name;
   };
   std::stack<UndoRecord> undo_stack;
-  auto enum_methods = [&](auto&& enum_methods, CgenNode* node) -> void {
+  std::vector<Symbol> attr_types;
+  auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
     const auto class_name = node->get_name();
     const auto features = node->get_features();
-    const auto prev_stack_size = undo_stack.size();
+    const auto prev_undo_stack_size = undo_stack.size();
+    const auto prev_attr_types_size = attr_types.size();
     for (int i = features->first(); features->more(i); i = features->next(i)) {
       const auto feature = features->nth(i);
-      if (!feature->is_method()) {
-        continue;
-      }
-      const auto method_name = feature->get_name();
-      int disp_table_index = disp_table.size();
-      if (auto ins_res = method_to_index.insert({ method_name, disp_table_index }); ins_res.second) {
-        undo_stack.push({ kAddEntry });
-        disp_table.push_back({ class_name, method_name });
+      if (feature->is_method()) {
+        const auto method_name = feature->get_name();
+        int disp_table_index = disp_table.size();
+        if (auto ins_res = method_to_index.insert({ method_name, disp_table_index }); ins_res.second) {
+          undo_stack.push({ kAddEntry });
+          disp_table.push_back({ class_name, method_name });
+        } else {
+          disp_table_index = ins_res.first->second;
+          undo_stack.push({ kUpdateEntry, disp_table_index, disp_table[disp_table_index].class_name });
+          disp_table[disp_table_index].class_name = class_name;
+        }
       } else {
-        disp_table_index = ins_res.first->second;
-        undo_stack.push({ kUpdateEntry, disp_table_index, disp_table[disp_table_index].class_name });
-        disp_table[disp_table_index].class_name = class_name;
+        attr_types.push_back(feature->get_type());
       }
     }
 
-    emit_disptable_ref(class_name, str);
-    str << LABEL;
+    emit_disptable_ref(class_name, str); str << LABEL;
     for (const auto& [class_name, method_name] : disp_table) {
+      str << WORD; emit_method_ref(class_name, method_name, str); str << ENDL;
+    }
+
+    str << WORD << "-1" << ENDL;
+    emit_protobj_ref(class_name, str); str << LABEL;
+    str << WORD << node->get_class_tag() << ENDL;
+    str << WORD << (DEFAULT_OBJFIELDS + attr_types.size()) << ENDL;
+    str << WORD; emit_disptable_ref(class_name, str); str << ENDL;
+    for (const auto attr_type : attr_types) {
       str << WORD;
-      emit_method_ref(class_name, method_name, str);
+      if (attr_type == Int) {
+        zero_int->code_ref(str);
+      } else if (attr_type == Bool) {
+        falsebool.code_ref(str);
+      } else if (attr_type == Str) {
+        empty_string->code_ref(str);
+      } else {
+        str << "0";
+      }
       str << ENDL;
     }
 
     for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
-      enum_methods(enum_methods, child->hd());
+      process_class(process_class, child->hd());
     }
 
-    while (undo_stack.size() != prev_stack_size) {
+    attr_types.resize(prev_attr_types_size);
+    while (undo_stack.size() != prev_undo_stack_size) {
       const auto& undo_record = undo_stack.top();
       switch (undo_record.action) {
         case kAddEntry:
@@ -668,7 +696,7 @@ void CgenClassTable::code_dispatch_table() {
       undo_stack.pop();
     }
   };
-  enum_methods(enum_methods, root());
+  process_class(process_class, root());
 }
 
 void CgenClassTable::code_class_name_table() {
@@ -679,9 +707,7 @@ void CgenClassTable::code_class_name_table() {
   }
   str << CLASSNAMETAB << LABEL;
   for (const auto entry : class_table) {
-    str << WORD;
-    entry->code_ref(str);
-    str << ENDL;
+    str << WORD; entry->code_ref(str); str << ENDL;
   }
 }
 
@@ -703,8 +729,8 @@ void CgenClassTable::code_constants()
   //
   // Add constants that are required by the code generator.
   //
-  stringtable.add_string("");
-  inttable.add_string("0");
+  empty_string = stringtable.add_string("");
+  zero_int = inttable.add_string("0");
 
   stringtable.code_string_table(str,stringclasstag);
   inttable.code_string_table(str,intclasstag);
@@ -935,7 +961,7 @@ void CgenClassTable::code()
 //                   - class_nameTab
 //                   - dispatch tables
 //
-  code_dispatch_table();
+  code_dispatch_table_and_prototype_objects();
   code_class_name_table();
 
   if (cgen_debug) cout << "coding global text" << endl;

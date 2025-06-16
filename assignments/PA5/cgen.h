@@ -18,10 +18,11 @@ class CgenClassTable : public SymbolTable<Symbol,CgenNode> {
 private:
    List<CgenNode> *nds;
    ostream& str;
-   int stringclasstag;
-   int intclasstag;
-   int boolclasstag;
-
+   int stringclasstag = -1;
+   int intclasstag = -1;
+   int boolclasstag = -1;
+   StringEntry* empty_string = nullptr;
+   IntEntry* zero_int = nullptr;
 
 // The following methods emit code for
 // constants and global declarations.
@@ -31,7 +32,7 @@ private:
    void code_bools(int);
    void code_select_gc();
    void code_constants();
-   void code_dispatch_table();
+   void code_dispatch_table_and_prototype_objects();
    void code_class_name_table();
 
 // The following creates an inheritance graph from
