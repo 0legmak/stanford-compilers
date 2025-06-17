@@ -5,6 +5,7 @@
 #define COOL_TREE_HANDCODE_H
 
 #include <iostream>
+#include <vector>
 #include "tree.h"
 #include "cool.h"
 #include "stringtab.h"
@@ -76,6 +77,7 @@ virtual Symbol get_name() = 0; \
 virtual bool is_method() = 0; \
 virtual Symbol get_type() = 0; \
 virtual Expression get_expr() = 0; \
+virtual Formals get_formals() = 0; \
 
 
 #define Feature_SHARED_EXTRAS                                       \
@@ -84,14 +86,17 @@ Symbol get_name() override { return name; }; \
 bool is_method() override; \
 Symbol get_type() override; \
 Expression get_expr() override; \
+Formals get_formals() override; \
 
 
 #define Formal_EXTRAS                              \
-virtual void dump_with_types(ostream&,int) = 0;
+virtual void dump_with_types(ostream&,int) = 0; \
+virtual Symbol get_name() = 0; \
 
 
 #define formal_EXTRAS                           \
-void dump_with_types(ostream&,int);
+void dump_with_types(ostream&,int); \
+Symbol get_name() override { return name; } \
 
 
 #define Case_EXTRAS                             \
@@ -106,13 +111,22 @@ struct SymbolLocation {
 	int offset;
 };
 
+struct FindMethodResult {
+	Symbol class_name;
+	int dispatch_table_index;
+	const std::vector<Symbol>& arg_names;
+};
+
 class CodeGenerator {
 public:
 	virtual ~CodeGenerator() {};
-	virtual SymbolLocation get_symbol_location(Symbol name) = 0;
 	virtual int get_label() = 0;
 	virtual void push(char* reg) = 0;
    	virtual void pop(char* reg) = 0;
+	virtual SymbolLocation get_symbol_location(Symbol name) = 0;
+	virtual SymbolLocation allocate_symbol_on_stack(Symbol name) = 0;
+	virtual void deallocate_symbol_on_stack() = 0;
+	virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
 };
 
 #define Expression_EXTRAS                    \

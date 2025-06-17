@@ -72,6 +72,10 @@ Symbol
        substr,
        type_name,
        val;
+
+StringEntryP empty_string;
+IntEntryP zero_int;
+
 //
 // Initializing the predefined symbols.
 //
@@ -105,6 +109,9 @@ static void initialize_constants(void)
   substr      = idtable.add_string("substr");
   type_name   = idtable.add_string("type_name");
   val         = idtable.add_string("_val");
+
+  empty_string = stringtable.add_string("");
+  zero_int = inttable.add_string("0");
 }
 
 static char *gc_init_names[] =
@@ -227,7 +234,7 @@ static void emit_sll(char *dest, char *src1, int num, ostream& s)
 { s << SLL << dest << " " << src1 << " " << num << endl; }
 
 static void emit_jalr(char *dest, ostream& s)
-{ s << JALR << "\t" << dest << endl; }
+{ s << JALR << dest << endl; }
 
 static void emit_jal(char *address,ostream &s)
 { s << JAL << address << endl; }
@@ -529,6 +536,14 @@ Expression attr_class::get_expr() {
   return init;
 }
 
+Formals method_class::get_formals() {
+  return formals;
+}
+
+Formals attr_class::get_formals() {
+  return nullptr;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -648,6 +663,7 @@ void CgenClassTable::code_dispatch_table_and_prototype_objects() {
     const auto features = node->get_features();
     const auto prev_undo_stack_size = undo_stack.size();
     const auto prev_attr_types_size = attr_types.size();
+    auto& method_table_for_class = method_table[class_name];
     for (int i = features->first(); features->more(i); i = features->next(i)) {
       const auto feature = features->nth(i);
       if (feature->is_method()) {
@@ -661,6 +677,12 @@ void CgenClassTable::code_dispatch_table_and_prototype_objects() {
           undo_stack.push({ kUpdateEntry, disp_table_index, disp_table[disp_table_index].class_name });
           disp_table[disp_table_index].class_name = class_name;
         }
+        const auto formals = feature->get_formals();
+        std::vector<Symbol> arg_names(formals->len());
+        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+          arg_names[j] = formals->nth(j)->get_name();
+        }
+        method_table_for_class[method_name] = { disp_table_index, std::move(arg_names) };
       } else {
         attr_types.push_back(feature->get_type());
       }
@@ -733,42 +755,89 @@ void CgenClassTable::code_class_name_and_object_tables() {
 }
 
 void CgenClassTable::code_methods() {
+  std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
   auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
     const auto class_name = node->get_name();
     const auto features = node->get_features();
-    const auto prev_attr_exprs_size = attr_exprs.size();
+    const auto prev_attrs_size = attr_exprs.size();
     for (int i = features->first(); features->more(i); i = features->next(i)) {
       const auto feature = features->nth(i);
-      if (feature->is_method()) {
-      } else {
+      if (!feature->is_method()) {
+        attr_names.push_back(feature->get_name());
         attr_exprs.push_back(feature->get_expr());
-        symbol_environment[feature->get_name()] = { SELF, DEFAULT_OBJFIELDS + i };
+        symbol_environment[feature->get_name()].push({ SELF, DEFAULT_OBJFIELDS + i });
       }
     }
 
     emit_init_ref(class_name, str); str << LABEL;
-    push(FP);
-    emit_addiu(FP, SP, WORD_SIZE, str);
-    push(RA);
-    push(SELF);
+    emit_store(FP, 0, SP, str);
+    emit_move(FP, SP, str);
+    emit_store(RA, -1, FP, str);
+    emit_store(SELF, -2, FP, str);
+    emit_addiu(SP, SP, -3 * WORD_SIZE, str);
     emit_move(SELF, ACC, str);
+    curr_fp_offset = -3;
     for (size_t i = 0; i < attr_exprs.size(); ++i) {
       if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
         attr_exprs[i]->code(str, *this);
         emit_store(ACC, DEFAULT_OBJFIELDS + i, SELF, str);
       }
     }
-    pop(SELF);
-    pop(RA);
-    pop(FP);
+    if (curr_fp_offset != -3) {
+      throw std::runtime_error("Wring FP offset");
+    }
+    emit_move(ACC, SELF, str);
+    emit_addiu(SP, SP, 3 * WORD_SIZE, str);
+    emit_load(SELF, -2, FP, str);
+    emit_load(RA, -1, FP, str);
+    emit_load(FP, 0, FP, str);
     emit_return(str);
+
+    if (!node->basic()) {
+      for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (!feature->is_method()) {
+          continue;
+        }
+        const auto formals = feature->get_formals();
+        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+          symbol_environment[formals->nth(j)->get_name()].push({ FP, j + 1 });
+        }
+
+        emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
+        emit_store(FP, 0, SP, str);
+        emit_move(FP, SP, str);
+        emit_store(RA, -1, FP, str);
+        emit_store(SELF, -2, FP, str);
+        emit_addiu(SP, SP, -3 * WORD_SIZE, str);
+        emit_move(SELF, ACC, str);
+        curr_fp_offset = -3;
+        feature->get_expr()->code(str, *this);
+        if (curr_fp_offset != -3) {
+          throw std::runtime_error("Wring FP offset");
+        }
+        emit_addiu(SP, SP, (3 + formals->len()) * WORD_SIZE, str);
+        emit_load(SELF, -2, FP, str);
+        emit_load(RA, -1, FP, str);
+        emit_load(FP, 0, FP, str);
+        emit_return(str);
+
+        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+          symbol_environment.at(formals->nth(j)->get_name()).pop();
+        }
+      }
+    }
 
     for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
       process_class(process_class, child->hd());
     }
 
-    attr_exprs.resize(prev_attr_exprs_size);
+    for (size_t i = prev_attrs_size; i < attr_names.size(); ++i) {
+      symbol_environment.at(attr_names[i]).pop();
+    }
+    attr_names.resize(prev_attrs_size);
+    attr_exprs.resize(prev_attrs_size);
   };
   process_class(process_class, root());
 }
@@ -788,12 +857,6 @@ void CgenClassTable::code_methods() {
 
 void CgenClassTable::code_constants()
 {
-  //
-  // Add constants that are required by the code generator.
-  //
-  empty_string = stringtable.add_string("");
-  zero_int = inttable.add_string("0");
-
   stringtable.code_string_table(str,stringclasstag);
   inttable.code_string_table(str,intclasstag);
   code_bools(boolclasstag);
@@ -1070,73 +1133,250 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct) :
 //
 //*****************************************************************
 
-SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
-  return symbol_environment.at(name);
-}
-
 int CgenClassTable::get_label() {
   return label_id++;
 }
 
 void CgenClassTable::push(char* reg) {
-    emit_push(reg, str);
-    --curr_fp_offset;
+  emit_push(reg, str);
+  --curr_fp_offset;
 }
 
 void CgenClassTable::pop(char* reg) {
-    emit_pop(reg, str);
-    ++curr_fp_offset;
+  emit_pop(reg, str);
+  ++curr_fp_offset;
 }
 
+SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
+  return symbol_environment.at(name).top();
+}
+
+SymbolLocation CgenClassTable::allocate_symbol_on_stack(Symbol name) {
+  stack_symbols.push(name);
+  auto& loc = symbol_environment[name];
+  loc.push({ FP, curr_fp_offset });
+  --curr_fp_offset;
+  return loc.top();
+}
+
+void CgenClassTable::deallocate_symbol_on_stack() {
+  symbol_environment.at(stack_symbols.top()).pop();
+  stack_symbols.pop();
+  ++curr_fp_offset;
+}
+
+FindMethodResult CgenClassTable::find_method(Symbol class_name, Symbol method_name) {
+  for (auto class_node = probe(class_name); class_node; class_node = class_node->get_parentnd()) {
+    const auto& class_method_table = method_table[class_node->get_name()];
+    const auto iter = class_method_table.find(method_name);
+    if (iter != class_method_table.end()) {
+      return { class_node->get_name(), iter->second.dispatch_table_index, iter->second.arg_names };
+    }
+  }
+  throw std::runtime_error("Method not found");
+}
+
+
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
+  expr->code(s, codegen);
+  const auto [reg, offset] = codegen.allocate_symbol_on_stack(name);
+  emit_store(ACC, offset, reg, s);
 }
 
 void static_dispatch_class::code(ostream &s, CodeGenerator& codegen) {
+  const auto [class_name, disp_table_index, arg_names] = codegen.find_method(type_name, name);
+  std::vector<SymbolLocation> arg_locations(arg_names.size());
+  for (int i = arg_names.size() - 1; i >= 0; --i) {
+    arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
+  }
+  emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    const auto expr = actual->nth(i);
+    expr->code(s, codegen);
+    emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
+  }
+  expr->code(s, codegen);
+  s << JAL; emit_method_ref(class_name, name, s); s << ENDL;
+  for (int i = arg_names.size() - 1; i >= 0; --i) {
+    codegen.deallocate_symbol_on_stack();
+  }
 }
 
 void dispatch_class::code(ostream &s, CodeGenerator& codegen) {
+  const auto [class_name, disp_table_index, arg_names] = codegen.find_method(expr->get_type(), name);
+  std::vector<SymbolLocation> arg_locations(arg_names.size());
+  for (int i = arg_names.size() - 1; i >= 0; --i) {
+    arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
+  }
+  emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
+  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
+    const auto expr = actual->nth(i);
+    expr->code(s, codegen);
+    emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
+  }
+  expr->code(s, codegen);
+  emit_load(T1, DISPTABLE_OFFSET, ACC, s);
+  emit_load(T1, disp_table_index, T1, s);
+  emit_jalr(T1, s);
+  for (int i = arg_names.size() - 1; i >= 0; --i) {
+    codegen.deallocate_symbol_on_stack();
+  }
 }
 
 void cond_class::code(ostream &s, CodeGenerator& codegen) {
+  const auto label_if_false = codegen.get_label();
+  const auto label_end = codegen.get_label();
+  pred->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_beqz(ACC, label_if_false, s);
+  then_exp->code(s, codegen);
+  emit_branch(label_end, s);
+  emit_label_def(label_if_false, s);
+  else_exp->code(s, codegen);
+  emit_label_def(label_end, s);
 }
 
 void loop_class::code(ostream &s, CodeGenerator& codegen) {
+  const auto label_start = codegen.get_label();
+  const auto label_end = codegen.get_label();
+  emit_label_def(label_start, s);
+  pred->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_beqz(ACC, label_end, s);
+  body->code(s, codegen);
+  emit_branch(label_start, s);
+  emit_label_def(label_end, s);
+  emit_load_imm(ACC, 0, s);
 }
 
 void typcase_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
 void block_class::code(ostream &s, CodeGenerator& codegen) {
+  for (int i = body->first(); body->more(i); i = body->next(i)) {
+    const auto expr = body->nth(i);
+    expr->code(s, codegen);
+  }
 }
 
 void let_class::code(ostream &s, CodeGenerator& codegen) {
+  if (init->get_type() && init->get_type() != No_type) {
+    init->code(s, codegen);
+  } else {
+    if (type_decl == Int) {
+      emit_load_int(ACC, zero_int, s);
+    } else if (type_decl == Bool) {
+      emit_load_bool(ACC, falsebool, s);
+    } else if (type_decl == Str) {
+      emit_load_string(ACC, empty_string, s);
+    } else {
+      emit_load_imm(ACC, 0, s);
+    }
+  }
+  const auto [reg, offset] = codegen.allocate_symbol_on_stack(identifier);
+  emit_addiu(SP, SP, -WORD_SIZE, s);
+  emit_store(ACC, offset, reg, s);
+  body->code(s, codegen);
+  emit_addiu(SP, SP, WORD_SIZE, s);
+  codegen.deallocate_symbol_on_stack();
+}
+
+template <auto emit_arith_op>
+void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.push(ACC);
+  e2->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.pop(T1);
+  emit_arith_op(ACC, T1, ACC, s);
+  codegen.push(ACC);
+  emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
+  emit_jal("Object.copy", s);
+  s << JAL; emit_init_ref(Int, s); s << ENDL;
+  codegen.pop(T1);
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void plus_class::code(ostream &s, CodeGenerator& codegen) {
+  code_arith<emit_add>(e1, e2, s, codegen);
 }
 
 void sub_class::code(ostream &s, CodeGenerator& codegen) {
+  code_arith<emit_sub>(e1, e2, s, codegen);
 }
 
 void mul_class::code(ostream &s, CodeGenerator& codegen) {
+  code_arith<emit_mul>(e1, e2, s, codegen);
 }
 
 void divide_class::code(ostream &s, CodeGenerator& codegen) {
+  code_arith<emit_div>(e1, e2, s, codegen);
 }
 
 void neg_class::code(ostream &s, CodeGenerator& codegen) {
-}
-
-void lt_class::code(ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_neg(ACC, ACC, s);
+  codegen.push(ACC);
+  emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
+  emit_jal("Object.copy", s);
+  s << JAL; emit_init_ref(Int, s); s << ENDL;
+  codegen.pop(T1);
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void eq_class::code(ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.push(ACC);
+  e2->code(s, codegen);
+  emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.pop(T1);
+  const auto eq_label = codegen.get_label();
+  emit_load_bool(ACC, truebool, s);
+  emit_beq(T1, T2, eq_label, s);
+  emit_load_bool(A1, falsebool, s);
+  emit_jal("equality_test", s);
+  emit_label_def(eq_label, s);
+}
+
+template<auto emit_cmp_branch>
+void code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.push(ACC);
+  e2->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  codegen.pop(T1);
+  const auto label_if_true = codegen.get_label();
+  const auto label_end = codegen.get_label();
+  emit_cmp_branch(T1, ACC, label_if_true, s);
+  emit_load_bool(ACC, falsebool, s);
+  emit_branch(label_end, s);
+  emit_label_def(label_if_true, s);
+  emit_load_bool(ACC, truebool, s);
+  emit_label_def(label_end, s);
+}
+
+void lt_class::code(ostream &s, CodeGenerator& codegen) {
+  code_comparison<emit_blt>(e1, e2, s, codegen);
 }
 
 void leq_class::code(ostream &s, CodeGenerator& codegen) {
+  code_comparison<emit_bleq>(e1, e2, s, codegen);
 }
 
 void comp_class::code(ostream &s, CodeGenerator& codegen) {
+  e1->code(s, codegen);
+  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  s << SLTI << ACC << "\t" << ACC << "\t" << 1 << ENDL;
+  codegen.push(ACC);
+  emit_partial_load_address(ACC, s); emit_protobj_ref(Bool, s); s << ENDL;
+  emit_jal("Object.copy", s);
+  s << JAL; emit_init_ref(Bool, s); s << ENDL;
+  codegen.pop(T1);
+  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
 void int_const_class::code(ostream& s, CodeGenerator& codegen)  
@@ -1163,7 +1403,7 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     emit_load(T2, TAG_OFFSET, SELF, s);
     emit_sll(T2, T2, 3, s);
     emit_add(T1, T1, T2, s);
-    emit_load(ACC, 4, T1, s);
+    emit_load(ACC, 1, T1, s);
     codegen.push(ACC);
     emit_load(ACC, 0, T1, s);
     emit_jal("Object.copy", s);

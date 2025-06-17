@@ -3,6 +3,7 @@
 #include "emit.h"
 #include "cool-tree.h"
 #include "symtab.h"
+#include <stack>
 #include <unordered_map>
 
 enum Basicness     {Basic, NotBasic};
@@ -22,16 +23,23 @@ private:
    int stringclasstag = -1;
    int intclasstag = -1;
    int boolclasstag = -1;
-   StringEntry* empty_string = nullptr;
-   IntEntry* zero_int = nullptr;
    
-   std::unordered_map<Symbol, SymbolLocation> symbol_environment;
+   struct MethodInfo {
+      int dispatch_table_index;
+      std::vector<Symbol> arg_names;
+   };
+   std::unordered_map<Symbol, std::unordered_map<Symbol, MethodInfo>> method_table;
+   std::unordered_map<Symbol, std::stack<SymbolLocation>> symbol_environment;
+   std::stack<Symbol> stack_symbols;
    int curr_fp_offset = 0;
    int label_id = 0;
-   SymbolLocation get_symbol_location(Symbol name) override;
    int get_label() override;
    void push(char* reg) override;
    void pop(char* reg) override;
+   SymbolLocation get_symbol_location(Symbol name) override;
+   SymbolLocation allocate_symbol_on_stack(Symbol name) override;
+   void deallocate_symbol_on_stack() override;
+   FindMethodResult find_method(Symbol class_name, Symbol method_name) override;
 
 
 // The following methods emit code for
