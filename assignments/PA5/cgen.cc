@@ -758,6 +758,7 @@ void CgenClassTable::code_methods() {
   std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
   auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
+    current_class_node = node;
     const auto class_name = node->get_name();
     const auto features = node->get_features();
     const auto prev_attrs_size = attr_exprs.size();
@@ -1176,6 +1177,31 @@ FindMethodResult CgenClassTable::find_method(Symbol class_name, Symbol method_na
   throw std::runtime_error("Method not found");
 }
 
+std::vector<int> CgenClassTable::create_jump_table(const std::vector<Symbol>& types) {
+  const int class_count = list_length(nds);
+  std::vector<int> used_type_indices(class_count, -1);
+  for (size_t i = 0; i < types.size(); ++i) {
+    const auto type = types[i];
+    const auto class_node = probe(type);
+    used_type_indices[class_node->get_class_tag()] = i;
+  }
+  std::vector<int> jump_table(class_count, -1);
+  auto dfs = [&](auto&& dfs, CgenNode* node, int closest_ancestor) -> void {
+    if (used_type_indices[node->get_class_tag()] != -1) {
+      closest_ancestor = used_type_indices[node->get_class_tag()];
+    }
+    jump_table[node->get_class_tag()] = closest_ancestor;
+    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
+      dfs(dfs, child->hd(), closest_ancestor);
+    }
+  };
+  dfs(dfs, root(), -1);
+  return jump_table;
+}
+
+char* CgenClassTable::get_filename() {
+  return current_class_node->get_filename()->get_string();
+}
 
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
   expr->code(s, codegen);
@@ -1250,6 +1276,62 @@ void loop_class::code(ostream &s, CodeGenerator& codegen) {
 }
 
 void typcase_class::code(ostream &s, CodeGenerator& codegen) {
+  const int cases_count = cases->len();
+  std::vector<Symbol> types(cases_count);
+  std::vector<int> case_labels(cases_count);
+  std::vector<Expression> case_expr(cases_count);
+  std::vector<Symbol> case_vars(cases_count);
+  for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
+    const auto cas = cases->nth(i);
+    types[i] = cas->get_type();
+    case_labels[i] = codegen.get_label();
+    case_expr[i] = cas->get_expr();
+    case_vars[i] = cas->get_name();
+  }
+  const auto jump_table = codegen.create_jump_table(types);
+  const auto jump_table_label = codegen.get_label();
+  const auto case_end_label = codegen.get_label();
+  const auto case_abort_label = codegen.get_label();
+  const auto case_abort2_label = codegen.get_label();
+  
+  expr->code(s, codegen);
+  emit_beqz(ACC, case_abort2_label, s);
+  emit_store(ACC, 0, SP, s);
+  emit_addiu(SP, SP, -WORD_SIZE, s);
+  emit_load(ACC, TAG_OFFSET, ACC, s);
+  emit_sll(ACC, ACC, 2, s);
+  emit_partial_load_address(T1, s); emit_label_ref(jump_table_label, s); s << ENDL;
+  emit_addu(ACC, T1, ACC, s);
+  emit_load(ACC, 0, ACC, s);
+  emit_jalr(ACC, s);
+  
+  for (int i = 0; i < cases_count; ++i) {
+    emit_label_def(case_labels[i], s);
+    codegen.allocate_symbol_on_stack(case_vars[i]);
+    case_expr[i]->code(s, codegen);
+    codegen.deallocate_symbol_on_stack();
+    emit_branch(case_end_label, s);
+  }
+
+  emit_label_def(case_abort_label, s);
+  emit_addiu(SP, SP, WORD_SIZE, s);
+  emit_load(ACC, 0, SP, s);
+  emit_jal("_case_abort", s);
+
+  emit_label_def(case_abort2_label, s);
+  emit_load_imm(T1, line_number, s);
+  emit_load_string(ACC, stringtable.lookup_string(codegen.get_filename()), s);  
+  emit_jal("_case_abort2", s);
+
+  emit_label_def(jump_table_label, s);
+  for (size_t i = 0; i < jump_table.size(); ++i) {
+    s << WORD;
+    emit_label_ref(jump_table[i] != -1 ? case_labels[jump_table[i]] : case_abort_label, s);
+    s << ENDL;
+  }
+
+  emit_label_def(case_end_label, s);
+  emit_addiu(SP, SP, WORD_SIZE, s);
 }
 
 void block_class::code(ostream &s, CodeGenerator& codegen) {

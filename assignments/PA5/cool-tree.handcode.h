@@ -100,11 +100,17 @@ Symbol get_name() override { return name; } \
 
 
 #define Case_EXTRAS                             \
-virtual void dump_with_types(ostream& ,int) = 0;
+virtual void dump_with_types(ostream& ,int) = 0; \
+virtual Symbol get_name() = 0; \
+virtual Symbol get_type() = 0; \
+virtual Expression get_expr() = 0; \
 
 
 #define branch_EXTRAS                                   \
-void dump_with_types(ostream& ,int);
+void dump_with_types(ostream& ,int); \
+Symbol get_name() override { return name; } \
+Symbol get_type() override { return type_decl; } \
+Expression get_expr() override { return expr; } \
 
 struct SymbolLocation {
 	char* reg;
@@ -127,6 +133,8 @@ public:
 	virtual SymbolLocation allocate_symbol_on_stack(Symbol name) = 0;
 	virtual void deallocate_symbol_on_stack() = 0;
 	virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
+	virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
+	virtual char* get_filename() = 0;
 };
 
 #define Expression_EXTRAS                    \

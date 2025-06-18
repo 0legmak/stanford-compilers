@@ -33,6 +33,8 @@ private:
    std::stack<Symbol> stack_symbols;
    int curr_fp_offset = 0;
    int label_id = 0;
+   CgenNode* current_class_node = nullptr;
+
    int get_label() override;
    void push(char* reg) override;
    void pop(char* reg) override;
@@ -40,6 +42,8 @@ private:
    SymbolLocation allocate_symbol_on_stack(Symbol name) override;
    void deallocate_symbol_on_stack() override;
    FindMethodResult find_method(Symbol class_name, Symbol method_name) override;
+	std::vector<int> create_jump_table(const std::vector<Symbol>& types) override;
+	char* get_filename() override;
 
 
 // The following methods emit code for
