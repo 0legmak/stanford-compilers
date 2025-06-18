@@ -1292,7 +1292,7 @@ void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen
   emit_arith_op(ACC, T1, ACC, s);
   codegen.push(ACC);
   emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
-  emit_jal("Object.copy", s);
+  emit_jal(OBJECT_COPY, s);
   s << JAL; emit_init_ref(Int, s); s << ENDL;
   codegen.pop(T1);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
@@ -1320,7 +1320,7 @@ void neg_class::code(ostream &s, CodeGenerator& codegen) {
   emit_neg(ACC, ACC, s);
   codegen.push(ACC);
   emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
-  emit_jal("Object.copy", s);
+  emit_jal(OBJECT_COPY, s);
   s << JAL; emit_init_ref(Int, s); s << ENDL;
   codegen.pop(T1);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
@@ -1371,12 +1371,14 @@ void comp_class::code(ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
   emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   s << SLTI << ACC << "\t" << ACC << "\t" << 1 << ENDL;
-  codegen.push(ACC);
-  emit_partial_load_address(ACC, s); emit_protobj_ref(Bool, s); s << ENDL;
-  emit_jal("Object.copy", s);
-  s << JAL; emit_init_ref(Bool, s); s << ENDL;
-  codegen.pop(T1);
-  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
+  const auto label_if_zero = codegen.get_label();
+  const auto label_end = codegen.get_label();
+  emit_beqz(ACC, label_if_zero, s);
+  emit_load_bool(ACC, truebool, s);
+  emit_branch(label_end, s);
+  emit_label_def(label_if_zero, s);
+  emit_load_bool(ACC, falsebool, s);
+  emit_label_def(label_end, s);
 }
 
 void int_const_class::code(ostream& s, CodeGenerator& codegen)  
@@ -1406,12 +1408,12 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     emit_load(ACC, 1, T1, s);
     codegen.push(ACC);
     emit_load(ACC, 0, T1, s);
-    emit_jal("Object.copy", s);
+    emit_jal(OBJECT_COPY, s);
     codegen.pop(T1);
     emit_jalr(T1, s);
   } else {
     emit_partial_load_address(ACC, s); emit_protobj_ref(type_name, s); s << ENDL;
-    emit_jal("Object.copy", s);
+    emit_jal(OBJECT_COPY, s);
     s << JAL; emit_init_ref(type_name, s); s << ENDL;
   }
 }
