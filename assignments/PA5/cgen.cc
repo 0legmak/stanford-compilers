@@ -1209,44 +1209,56 @@ void assign_class::code(ostream &s, CodeGenerator& codegen) {
   emit_store(ACC, offset, reg, s);
 }
 
-void static_dispatch_class::code(ostream &s, CodeGenerator& codegen) {
-  const auto [class_name, disp_table_index, arg_names] = codegen.find_method(type_name, name);
+void code_dispatch(
+  bool dynamic,
+  Expression expr,
+  Symbol type,
+  Symbol method_name,
+  Expressions args,
+  int line_number,
+  ostream &s,
+  CodeGenerator& codegen
+) {
+  const auto [class_name, disp_table_index, arg_names] =
+    codegen.find_method(dynamic ? expr->get_type() : type, method_name);
   std::vector<SymbolLocation> arg_locations(arg_names.size());
   for (int i = arg_names.size() - 1; i >= 0; --i) {
     arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
   }
   emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
-  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
-    const auto expr = actual->nth(i);
+  for (int i = args->first(); args->more(i); i = args->next(i)) {
+    const auto expr = args->nth(i);
     expr->code(s, codegen);
     emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
   }
   expr->code(s, codegen);
-  s << JAL; emit_method_ref(class_name, name, s); s << ENDL;
   for (int i = arg_names.size() - 1; i >= 0; --i) {
     codegen.deallocate_symbol_on_stack();
   }
+  const auto dispatch_abort_label = codegen.get_label();
+  const auto end_label = codegen.get_label();
+  emit_beqz(ACC, dispatch_abort_label, s);
+  if (dynamic) {
+    emit_load(T1, DISPTABLE_OFFSET, ACC, s);
+    emit_load(T1, disp_table_index, T1, s);
+    emit_jalr(T1, s);
+  } else {
+    s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
+  }
+  emit_branch(end_label, s);
+  emit_label_def(dispatch_abort_label, s);
+  emit_load_imm(T1, line_number, s);
+  emit_load_string(ACC, stringtable.lookup_string(codegen.get_filename()), s);  
+  emit_jal("_dispatch_abort", s);
+  emit_label_def(end_label, s);
+}
+
+void static_dispatch_class::code(ostream &s, CodeGenerator& codegen) {
+  code_dispatch(false, expr, type_name, name, actual, line_number, s, codegen);
 }
 
 void dispatch_class::code(ostream &s, CodeGenerator& codegen) {
-  const auto [class_name, disp_table_index, arg_names] = codegen.find_method(expr->get_type(), name);
-  std::vector<SymbolLocation> arg_locations(arg_names.size());
-  for (int i = arg_names.size() - 1; i >= 0; --i) {
-    arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
-  }
-  emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
-  for (int i = actual->first(); actual->more(i); i = actual->next(i)) {
-    const auto expr = actual->nth(i);
-    expr->code(s, codegen);
-    emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
-  }
-  expr->code(s, codegen);
-  emit_load(T1, DISPTABLE_OFFSET, ACC, s);
-  emit_load(T1, disp_table_index, T1, s);
-  emit_jalr(T1, s);
-  for (int i = arg_names.size() - 1; i >= 0; --i) {
-    codegen.deallocate_symbol_on_stack();
-  }
+  code_dispatch(true, expr, nullptr, name, actual, line_number, s, codegen);
 }
 
 void cond_class::code(ostream &s, CodeGenerator& codegen) {
