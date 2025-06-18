@@ -786,7 +786,7 @@ void CgenClassTable::code_methods() {
       }
     }
     if (curr_fp_offset != -3) {
-      throw std::runtime_error("Wring FP offset");
+      throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
     }
     emit_move(ACC, SELF, str);
     emit_addiu(SP, SP, 3 * WORD_SIZE, str);
@@ -816,7 +816,7 @@ void CgenClassTable::code_methods() {
         curr_fp_offset = -3;
         feature->get_expr()->code(str, *this);
         if (curr_fp_offset != -3) {
-          throw std::runtime_error("Wring FP offset");
+          throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
         }
         emit_addiu(SP, SP, (3 + formals->len()) * WORD_SIZE, str);
         emit_load(SELF, -2, FP, str);
@@ -1141,11 +1141,17 @@ int CgenClassTable::get_label() {
 void CgenClassTable::push(char* reg) {
   emit_push(reg, str);
   --curr_fp_offset;
+  if (cgen_debug) {
+    cerr << "Pushing " << reg << " to stack, current FP offset: " << curr_fp_offset << endl;
+  }
 }
 
 void CgenClassTable::pop(char* reg) {
   emit_pop(reg, str);
   ++curr_fp_offset;
+  if (cgen_debug) {
+    cerr << "Popping " << reg << " from stack, current FP offset: " << curr_fp_offset << endl;
+  }
 }
 
 SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
@@ -1157,10 +1163,16 @@ SymbolLocation CgenClassTable::allocate_symbol_on_stack(Symbol name) {
   auto& loc = symbol_environment[name];
   loc.push({ FP, curr_fp_offset });
   --curr_fp_offset;
+  if (cgen_debug) {
+    cerr << "Allocating symbol " << name << " on stack, current FP offset: " << curr_fp_offset << endl;
+  }
   return loc.top();
 }
 
 void CgenClassTable::deallocate_symbol_on_stack() {
+  if (cgen_debug) {
+    cerr << "Deallocating symbol " << stack_symbols.top() << ", current FP offset: " << curr_fp_offset + 1 << endl;
+  }
   symbol_environment.at(stack_symbols.top()).pop();
   stack_symbols.pop();
   ++curr_fp_offset;
@@ -1205,7 +1217,7 @@ char* CgenClassTable::get_filename() {
 
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
   expr->code(s, codegen);
-  const auto [reg, offset] = codegen.allocate_symbol_on_stack(name);
+  const auto [reg, offset] = codegen.get_symbol_location(name);
   emit_store(ACC, offset, reg, s);
 }
 
