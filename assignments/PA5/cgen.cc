@@ -1440,10 +1440,9 @@ void neg_class::code(ostream &s, CodeGenerator& codegen) {
 
 void eq_class::code(ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   codegen.push(ACC);
   e2->code(s, codegen);
-  emit_load(T2, DEFAULT_OBJFIELDS, ACC, s);
+  emit_move(T2, ACC, s);
   codegen.pop(T1);
   const auto eq_label = codegen.get_label();
   emit_load_bool(ACC, truebool, s);
