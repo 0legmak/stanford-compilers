@@ -1179,14 +1179,20 @@ void CgenClassTable::deallocate_symbol_on_stack() {
 }
 
 FindMethodResult CgenClassTable::find_method(Symbol class_name, Symbol method_name) {
-  for (auto class_node = probe(class_name); class_node; class_node = class_node->get_parentnd()) {
+  for (
+    auto class_node = class_name == SELF_TYPE ? current_class_node : probe(class_name);
+    class_node;
+    class_node = class_node->get_parentnd()
+  ) {
     const auto& class_method_table = method_table[class_node->get_name()];
     const auto iter = class_method_table.find(method_name);
     if (iter != class_method_table.end()) {
       return { class_node->get_name(), iter->second.dispatch_table_index, iter->second.arg_names };
     }
   }
-  throw std::runtime_error("Method not found");
+  throw std::runtime_error(
+    std::string("Method ") + method_name->get_string() + " not found in class " + class_name->get_string()
+  );
 }
 
 std::vector<int> CgenClassTable::create_jump_table(const std::vector<Symbol>& types) {
