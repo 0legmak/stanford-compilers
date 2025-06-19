@@ -802,8 +802,9 @@ void CgenClassTable::code_methods() {
           continue;
         }
         const auto formals = feature->get_formals();
+        const auto arg_cnt = formals->len();
         for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-          symbol_environment[formals->nth(j)->get_name()].push({ FP, j + 1 });
+          symbol_environment[formals->nth(j)->get_name()].push({ FP, arg_cnt - j });
         }
 
         emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
@@ -818,7 +819,7 @@ void CgenClassTable::code_methods() {
         if (curr_fp_offset != -3) {
           throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
         }
-        emit_addiu(SP, SP, (3 + formals->len()) * WORD_SIZE, str);
+        emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
         emit_load(SELF, -2, FP, str);
         emit_load(RA, -1, FP, str);
         emit_load(FP, 0, FP, str);
@@ -1240,7 +1241,7 @@ void code_dispatch(
   const auto [class_name, disp_table_index, arg_names] =
     codegen.find_method(dynamic ? expr->get_type() : type, method_name);
   std::vector<SymbolLocation> arg_locations(arg_names.size());
-  for (int i = arg_names.size() - 1; i >= 0; --i) {
+  for (size_t i = 0; i < arg_names.size(); ++i) {
     arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
   }
   emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
@@ -1250,7 +1251,7 @@ void code_dispatch(
     emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
   }
   expr->code(s, codegen);
-  for (int i = arg_names.size() - 1; i >= 0; --i) {
+  for (size_t i = 0; i < arg_names.size(); ++i) {
     codegen.deallocate_symbol_on_stack();
   }
   const auto dispatch_abort_label = codegen.get_label();
@@ -1393,6 +1394,12 @@ void let_class::code(ostream &s, CodeGenerator& codegen) {
   codegen.deallocate_symbol_on_stack();
 }
 
+void create_object(Symbol type, ostream &s) {
+  emit_partial_load_address(ACC, s); emit_protobj_ref(type, s); s << ENDL;
+  emit_jal(OBJECT_COPY, s);
+  s << JAL; emit_init_ref(type, s); s << ENDL;
+}
+
 template <auto emit_arith_op>
 void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
@@ -1403,9 +1410,7 @@ void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen
   codegen.pop(T1);
   emit_arith_op(ACC, T1, ACC, s);
   codegen.push(ACC);
-  emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
-  emit_jal(OBJECT_COPY, s);
-  s << JAL; emit_init_ref(Int, s); s << ENDL;
+  create_object(Int, s);
   codegen.pop(T1);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1431,9 +1436,7 @@ void neg_class::code(ostream &s, CodeGenerator& codegen) {
   emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   emit_neg(ACC, ACC, s);
   codegen.push(ACC);
-  emit_partial_load_address(ACC, s); emit_protobj_ref(Int, s); s << ENDL;
-  emit_jal(OBJECT_COPY, s);
-  s << JAL; emit_init_ref(Int, s); s << ENDL;
+  create_object(Int, s);
   codegen.pop(T1);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
@@ -1523,9 +1526,7 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     codegen.pop(T1);
     emit_jalr(T1, s);
   } else {
-    emit_partial_load_address(ACC, s); emit_protobj_ref(type_name, s); s << ENDL;
-    emit_jal(OBJECT_COPY, s);
-    s << JAL; emit_init_ref(type_name, s); s << ENDL;
+    create_object(type_name, s);
   }
 }
 
