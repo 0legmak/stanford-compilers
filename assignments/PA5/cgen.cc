@@ -167,20 +167,20 @@ void program_class::cgen(ostream &os)
 static void emit_load(char *dest_reg, int offset, char *source_reg, ostream& s)
 {
   s << LW << dest_reg << " " << offset * WORD_SIZE << "(" << source_reg << ")" 
-    << endl;
+    << ENDL;
 }
 
 static void emit_store(char *source_reg, int offset, char *dest_reg, ostream& s)
 {
   s << SW << source_reg << " " << offset * WORD_SIZE << "(" << dest_reg << ")"
-      << endl;
+      << ENDL;
 }
 
 static void emit_load_imm(char *dest_reg, int val, ostream& s)
-{ s << LI << dest_reg << " " << val << endl; }
+{ s << LI << dest_reg << " " << val << ENDL; }
 
 static void emit_load_address(char *dest_reg, char *address, ostream& s)
-{ s << LA << dest_reg << " " << address << endl; }
+{ s << LA << dest_reg << " " << address << ENDL; }
 
 static void emit_partial_load_address(char *dest_reg, ostream& s)
 { s << LA << dest_reg << " "; }
@@ -189,61 +189,61 @@ static void emit_load_bool(char *dest, const BoolConst& b, ostream& s)
 {
   emit_partial_load_address(dest,s);
   b.code_ref(s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_load_string(char *dest, StringEntry *str, ostream& s)
 {
   emit_partial_load_address(dest,s);
   str->code_ref(s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_load_int(char *dest, IntEntry *i, ostream& s)
 {
   emit_partial_load_address(dest,s);
   i->code_ref(s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_move(char *dest_reg, char *source_reg, ostream& s)
-{ s << MOVE << dest_reg << " " << source_reg << endl; }
+{ s << MOVE << dest_reg << " " << source_reg << ENDL; }
 
 static void emit_neg(char *dest, char *src1, ostream& s)
-{ s << NEG << dest << " " << src1 << endl; }
+{ s << NEG << dest << " " << src1 << ENDL; }
 
 static void emit_add(char *dest, char *src1, char *src2, ostream& s)
-{ s << ADD << dest << " " << src1 << " " << src2 << endl; }
+{ s << ADD << dest << " " << src1 << " " << src2 << ENDL; }
 
 static void emit_addu(char *dest, char *src1, char *src2, ostream& s)
-{ s << ADDU << dest << " " << src1 << " " << src2 << endl; }
+{ s << ADDU << dest << " " << src1 << " " << src2 << ENDL; }
 
 static void emit_addiu(char *dest, char *src1, int imm, ostream& s)
-{ s << ADDIU << dest << " " << src1 << " " << imm << endl; }
+{ s << ADDIU << dest << " " << src1 << " " << imm << ENDL; }
 
 static void emit_div(char *dest, char *src1, char *src2, ostream& s)
-{ s << DIV << dest << " " << src1 << " " << src2 << endl; }
+{ s << DIV << dest << " " << src1 << " " << src2 << ENDL; }
 
 static void emit_mul(char *dest, char *src1, char *src2, ostream& s)
-{ s << MUL << dest << " " << src1 << " " << src2 << endl; }
+{ s << MUL << dest << " " << src1 << " " << src2 << ENDL; }
 
 static void emit_sub(char *dest, char *src1, char *src2, ostream& s)
-{ s << SUB << dest << " " << src1 << " " << src2 << endl; }
+{ s << SUB << dest << " " << src1 << " " << src2 << ENDL; }
 
 static void emit_sll(char *dest, char *src1, int num, ostream& s)
-{ s << SLL << dest << " " << src1 << " " << num << endl; }
+{ s << SLL << dest << " " << src1 << " " << num << ENDL; }
 
 static void emit_jalr(char *dest, ostream& s)
-{ s << JALR << dest << endl; }
+{ s << JALR << dest << ENDL; }
 
 static void emit_jal(char *address,ostream &s)
-{ s << JAL << address << endl; }
+{ s << JAL << address << ENDL; }
 
 static void emit_return(ostream& s)
-{ s << RET << endl; }
+{ s << RET << ENDL; }
 
 static void emit_gc_assign(ostream& s)
-{ s << JAL << "_GenGC_Assign" << endl; }
+{ s << JAL << "_GenGC_Assign" << ENDL; }
 
 static void emit_disptable_ref(Symbol sym, ostream& s)
 {  s << sym << DISPTAB_SUFFIX; }
@@ -263,63 +263,63 @@ static void emit_method_ref(Symbol classname, Symbol methodname, ostream& s)
 static void emit_label_def(int l, ostream &s)
 {
   emit_label_ref(l,s);
-  s << ":" << endl;
+  s << ":" << ENDL;
 }
 
 static void emit_beqz(char *source, int label, ostream &s)
 {
   s << BEQZ << source << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_beq(char *src1, char *src2, int label, ostream &s)
 {
   s << BEQ << src1 << " " << src2 << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_bne(char *src1, char *src2, int label, ostream &s)
 {
   s << BNE << src1 << " " << src2 << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_bleq(char *src1, char *src2, int label, ostream &s)
 {
   s << BLEQ << src1 << " " << src2 << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_blt(char *src1, char *src2, int label, ostream &s)
 {
   s << BLT << src1 << " " << src2 << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_blti(char *src1, int imm, int label, ostream &s)
 {
   s << BLT << src1 << " " << imm << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_bgti(char *src1, int imm, int label, ostream &s)
 {
   s << BGT << src1 << " " << imm << " ";
   emit_label_ref(label,s);
-  s << endl;
+  s << ENDL;
 }
 
 static void emit_branch(int l, ostream& s)
 {
   s << BRANCH;
   emit_label_ref(l,s);
-  s << endl;
+  s << ENDL;
 }
 
 //
@@ -358,7 +358,7 @@ static void emit_test_collector(ostream &s)
   emit_push(ACC, s);
   emit_move(ACC, SP, s); // stack end
   emit_move(A1, ZERO, s); // allocate nothing
-  s << JAL << gc_collect_names[cgen_Memmgr] << endl;
+  s << JAL << gc_collect_names[cgen_Memmgr] << ENDL;
   emit_addiu(SP,SP,4,s);
   emit_load(ACC,0,SP,s);
 }
@@ -366,7 +366,7 @@ static void emit_test_collector(ostream &s)
 static void emit_gc_check(char *source, ostream &s)
 {
   if (source != (char*)A1) emit_move(A1, source, s);
-  s << JAL << "_gc_check" << endl;
+  s << JAL << "_gc_check" << ENDL;
 }
 
 
@@ -569,26 +569,26 @@ void CgenClassTable::code_global_data()
   //
   // The following global names must be defined first.
   //
-  str << GLOBAL << CLASSNAMETAB << endl;
-  str << GLOBAL; emit_protobj_ref(main,str);    str << endl;
-  str << GLOBAL; emit_protobj_ref(integer,str); str << endl;
-  str << GLOBAL; emit_protobj_ref(string,str);  str << endl;
-  str << GLOBAL; falsebool.code_ref(str);  str << endl;
-  str << GLOBAL; truebool.code_ref(str);   str << endl;
-  str << GLOBAL << INTTAG << endl;
-  str << GLOBAL << BOOLTAG << endl;
-  str << GLOBAL << STRINGTAG << endl;
+  str << GLOBAL << CLASSNAMETAB << ENDL;
+  str << GLOBAL; emit_protobj_ref(main,str);    str << ENDL;
+  str << GLOBAL; emit_protobj_ref(integer,str); str << ENDL;
+  str << GLOBAL; emit_protobj_ref(string,str);  str << ENDL;
+  str << GLOBAL; falsebool.code_ref(str);  str << ENDL;
+  str << GLOBAL; truebool.code_ref(str);   str << ENDL;
+  str << GLOBAL << INTTAG << ENDL;
+  str << GLOBAL << BOOLTAG << ENDL;
+  str << GLOBAL << STRINGTAG << ENDL;
 
   //
   // We also need to know the tag of the Int, String, and Bool classes
   // during code generation.
   //
   str << INTTAG << LABEL
-      << WORD << intclasstag << endl;
+      << WORD << intclasstag << ENDL;
   str << BOOLTAG << LABEL 
-      << WORD << boolclasstag << endl;
+      << WORD << boolclasstag << ENDL;
   str << STRINGTAG << LABEL 
-      << WORD << stringclasstag << endl;    
+      << WORD << stringclasstag << ENDL;    
 }
 
 
@@ -601,21 +601,21 @@ void CgenClassTable::code_global_data()
 
 void CgenClassTable::code_global_text()
 {
-  str << GLOBAL << HEAP_START << endl
+  str << GLOBAL << HEAP_START << ENDL
       << HEAP_START << LABEL 
-      << WORD << 0 << endl
-      << "\t.text" << endl
+      << WORD << 0 << ENDL
+      << "\t.text" << ENDL
       << GLOBAL;
   emit_init_ref(idtable.add_string("Main"), str);
-  str << endl << GLOBAL;
+  str << ENDL << GLOBAL;
   emit_init_ref(idtable.add_string("Int"),str);
-  str << endl << GLOBAL;
+  str << ENDL << GLOBAL;
   emit_init_ref(idtable.add_string("String"),str);
-  str << endl << GLOBAL;
+  str << ENDL << GLOBAL;
   emit_init_ref(idtable.add_string("Bool"),str);
-  str << endl << GLOBAL;
+  str << ENDL << GLOBAL;
   emit_method_ref(idtable.add_string("Main"), idtable.add_string("main"), str);
-  str << endl;
+  str << ENDL;
 }
 
 void CgenClassTable::code_bools(int boolclasstag)
@@ -629,15 +629,15 @@ void CgenClassTable::code_select_gc()
   //
   // Generate GC choice constants (pointers to GC functions)
   //
-  str << GLOBAL << "_MemMgr_INITIALIZER" << endl;
-  str << "_MemMgr_INITIALIZER:" << endl;
-  str << WORD << gc_init_names[cgen_Memmgr] << endl;
-  str << GLOBAL << "_MemMgr_COLLECTOR" << endl;
-  str << "_MemMgr_COLLECTOR:" << endl;
-  str << WORD << gc_collect_names[cgen_Memmgr] << endl;
-  str << GLOBAL << "_MemMgr_TEST" << endl;
-  str << "_MemMgr_TEST:" << endl;
-  str << WORD << (cgen_Memmgr_Test == GC_TEST) << endl;
+  str << GLOBAL << "_MemMgr_INITIALIZER" << ENDL;
+  str << "_MemMgr_INITIALIZER:" << ENDL;
+  str << WORD << gc_init_names[cgen_Memmgr] << ENDL;
+  str << GLOBAL << "_MemMgr_COLLECTOR" << ENDL;
+  str << "_MemMgr_COLLECTOR:" << ENDL;
+  str << WORD << gc_collect_names[cgen_Memmgr] << ENDL;
+  str << GLOBAL << "_MemMgr_TEST" << ENDL;
+  str << "_MemMgr_TEST:" << ENDL;
+  str << WORD << (cgen_Memmgr_Test == GC_TEST) << ENDL;
 }
 
 void CgenClassTable::code_dispatch_table_and_prototype_objects() {
@@ -1545,7 +1545,7 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     emit_load_address(T1, CLASSOBJTAB, s);
     emit_load(T2, TAG_OFFSET, SELF, s);
     emit_sll(T2, T2, 3, s);
-    emit_add(T1, T1, T2, s);
+    emit_addu(T1, T1, T2, s);
     emit_load(ACC, 1, T1, s);
     codegen.push(ACC);
     emit_load(ACC, 0, T1, s);
