@@ -767,8 +767,11 @@ void CgenClassTable::code_methods() {
       if (!feature->is_method()) {
         attr_names.push_back(feature->get_name());
         attr_exprs.push_back(feature->get_expr());
-        push_symbol_location(feature->get_name(), { SELF, DEFAULT_OBJFIELDS + i });
       }
+    }
+    const int attr_count = attr_names.size();
+    for (int i = 0; i < attr_count; ++i) {
+      push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
     }
 
     emit_init_ref(class_name, str); str << LABEL;
@@ -779,7 +782,7 @@ void CgenClassTable::code_methods() {
     emit_addiu(SP, SP, -3 * WORD_SIZE, str);
     emit_move(SELF, ACC, str);
     curr_fp_offset = -3;
-    for (size_t i = 0; i < attr_exprs.size(); ++i) {
+    for (int i = 0; i < attr_count; ++i) {
       if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
         attr_exprs[i]->code(str, *this);
         emit_store(ACC, DEFAULT_OBJFIELDS + i, SELF, str);
