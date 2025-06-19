@@ -1380,6 +1380,7 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   emit_load_string(ACC, stringtable.lookup_string(codegen.get_filename()), s);  
   emit_jal("_case_abort2", s);
 
+  s << ALIGN;
   emit_label_def(jump_table_label, s);
   for (size_t i = 0; i < jump_table.size(); ++i) {
     s << WORD;
