@@ -767,7 +767,7 @@ void CgenClassTable::code_methods() {
       if (!feature->is_method()) {
         attr_names.push_back(feature->get_name());
         attr_exprs.push_back(feature->get_expr());
-        symbol_environment[feature->get_name()].push({ SELF, DEFAULT_OBJFIELDS + i });
+        push_symbol_location(feature->get_name(), { SELF, DEFAULT_OBJFIELDS + i });
       }
     }
 
@@ -804,7 +804,7 @@ void CgenClassTable::code_methods() {
         const auto formals = feature->get_formals();
         const auto arg_cnt = formals->len();
         for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-          symbol_environment[formals->nth(j)->get_name()].push({ FP, arg_cnt - j });
+          push_symbol_location(formals->nth(j)->get_name(), { FP, arg_cnt - j });
         }
 
         emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
@@ -825,8 +825,8 @@ void CgenClassTable::code_methods() {
         emit_load(FP, 0, FP, str);
         emit_return(str);
 
-        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-          symbol_environment.at(formals->nth(j)->get_name()).pop();
+        for (int j = 0; j < arg_cnt; ++j) {
+          pop_symbol_location();
         }
       }
     }
@@ -836,7 +836,7 @@ void CgenClassTable::code_methods() {
     }
 
     for (size_t i = prev_attrs_size; i < attr_names.size(); ++i) {
-      symbol_environment.at(attr_names[i]).pop();
+      pop_symbol_location();
     }
     attr_names.resize(prev_attrs_size);
     attr_exprs.resize(prev_attrs_size);
@@ -1143,7 +1143,7 @@ void CgenClassTable::push(char* reg) {
   emit_push(reg, str);
   --curr_fp_offset;
   if (cgen_debug) {
-    cerr << "Pushing " << reg << " to stack, current FP offset: " << curr_fp_offset << endl;
+    std::cerr << "Pushing " << reg << " to stack, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
@@ -1151,32 +1151,61 @@ void CgenClassTable::pop(char* reg) {
   emit_pop(reg, str);
   ++curr_fp_offset;
   if (cgen_debug) {
-    cerr << "Popping " << reg << " from stack, current FP offset: " << curr_fp_offset << endl;
+    std::cerr << "Popping " << reg << " from stack, current FP offset: " << curr_fp_offset << std::endl;
+  }
+}
+
+int CgenClassTable::allocate_stack_space(int word_cnt) {
+  if (word_cnt == 0) {
+    return curr_fp_offset;
+  }
+  const auto prev_fp_offset = curr_fp_offset;
+  emit_addiu(SP, SP, -word_cnt * WORD_SIZE, str);
+  curr_fp_offset -= word_cnt;
+  if (cgen_debug) {
+    std::cerr << "Allocated " << word_cnt << " words on stack, current FP offset: " << curr_fp_offset << std::endl;
+  }
+  return prev_fp_offset;
+}
+
+void CgenClassTable::free_stack_space(int word_cnt, bool emit_code) {
+  if (word_cnt == 0) {
+    return;
+  }
+  if (emit_code) {
+    emit_addiu(SP, SP, word_cnt * WORD_SIZE, str);
+  }
+  curr_fp_offset += word_cnt;
+  if (cgen_debug) {
+    std::cerr << "Freed " << word_cnt << " words on stack, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
 SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
-  return symbol_environment.at(name).top();
+  const auto loc = symbol_environment.at(name).top();
+  if (cgen_debug) {
+    std::cerr << "Found symbol " << name << " at location " << loc.offset << "(" << loc.reg << ")" << std::endl;
+  }
+  return loc;
 }
 
-SymbolLocation CgenClassTable::allocate_symbol_on_stack(Symbol name) {
+void CgenClassTable::push_symbol_location(Symbol name, SymbolLocation loc) {
   stack_symbols.push(name);
-  auto& loc = symbol_environment[name];
-  loc.push({ FP, curr_fp_offset });
-  --curr_fp_offset;
+  auto& locs = symbol_environment[name];
+  locs.push(loc);
   if (cgen_debug) {
-    cerr << "Allocating symbol " << name << " on stack, current FP offset: " << curr_fp_offset << endl;
+    std::cerr << "Created symbol " << name << " at location " << loc.offset << "(" << loc.reg << ")" << std::endl;
   }
-  return loc.top();
 }
 
-void CgenClassTable::deallocate_symbol_on_stack() {
+void CgenClassTable::pop_symbol_location() {
+  auto& locs = symbol_environment.at(stack_symbols.top());
   if (cgen_debug) {
-    cerr << "Deallocating symbol " << stack_symbols.top() << ", current FP offset: " << curr_fp_offset + 1 << endl;
+    std::cerr << "Deleted symbol " << stack_symbols.top() << " at location "
+      << locs.top().offset << "(" << locs.top().reg << ")" << std::endl;
   }
-  symbol_environment.at(stack_symbols.top()).pop();
+  locs.pop();
   stack_symbols.pop();
-  ++curr_fp_offset;
 }
 
 FindMethodResult CgenClassTable::find_method(Symbol class_name, Symbol method_name) {
@@ -1240,20 +1269,14 @@ void code_dispatch(
 ) {
   const auto [class_name, disp_table_index, arg_names] =
     codegen.find_method(dynamic ? expr->get_type() : type, method_name);
-  std::vector<SymbolLocation> arg_locations(arg_names.size());
-  for (size_t i = 0; i < arg_names.size(); ++i) {
-    arg_locations[i] = codegen.allocate_symbol_on_stack(arg_names[i]);
-  }
-  emit_addiu(SP, SP, -WORD_SIZE * arg_names.size(), s);
+  const auto arg_cnt = arg_names.size();
+  const auto arg_stack_offset_start = codegen.allocate_stack_space(arg_cnt);
   for (int i = args->first(); args->more(i); i = args->next(i)) {
     const auto expr = args->nth(i);
     expr->code(s, codegen);
-    emit_store(ACC, arg_locations[i].offset, arg_locations[i].reg, s);
+    emit_store(ACC, arg_stack_offset_start - i, FP, s);
   }
   expr->code(s, codegen);
-  for (size_t i = 0; i < arg_names.size(); ++i) {
-    codegen.deallocate_symbol_on_stack();
-  }
   const auto dispatch_abort_label = codegen.get_label();
   const auto end_label = codegen.get_label();
   emit_beqz(ACC, dispatch_abort_label, s);
@@ -1264,6 +1287,7 @@ void code_dispatch(
   } else {
     s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
   }
+  codegen.free_stack_space(arg_cnt, false);
   emit_branch(end_label, s);
   emit_label_def(dispatch_abort_label, s);
   emit_load_imm(T1, line_number, s);
@@ -1327,8 +1351,8 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   expr->code(s, codegen);
   emit_beqz(ACC, case_abort2_label, s);
-  emit_store(ACC, 0, SP, s);
-  emit_addiu(SP, SP, -WORD_SIZE, s);
+  const auto case_var_stack_offset = codegen.allocate_stack_space(1);
+  emit_store(ACC, case_var_stack_offset, FP, s);
   emit_load(ACC, TAG_OFFSET, ACC, s);
   emit_sll(ACC, ACC, 2, s);
   emit_partial_load_address(T1, s); emit_label_ref(jump_table_label, s); s << ENDL;
@@ -1338,15 +1362,14 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   for (int i = 0; i < cases_count; ++i) {
     emit_label_def(case_labels[i], s);
-    codegen.allocate_symbol_on_stack(case_vars[i]);
+    codegen.push_symbol_location(case_vars[i], { FP, case_var_stack_offset });
     case_expr[i]->code(s, codegen);
-    codegen.deallocate_symbol_on_stack();
+    codegen.pop_symbol_location();
     emit_branch(case_end_label, s);
   }
 
   emit_label_def(case_abort_label, s);
-  emit_addiu(SP, SP, WORD_SIZE, s);
-  emit_load(ACC, 0, SP, s);
+  emit_load(ACC, case_var_stack_offset, FP, s);
   emit_jal("_case_abort", s);
 
   emit_label_def(case_abort2_label, s);
@@ -1362,7 +1385,7 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   }
 
   emit_label_def(case_end_label, s);
-  emit_addiu(SP, SP, WORD_SIZE, s);
+  codegen.free_stack_space(1, true);
 }
 
 void block_class::code(ostream &s, CodeGenerator& codegen) {
@@ -1386,12 +1409,12 @@ void let_class::code(ostream &s, CodeGenerator& codegen) {
       emit_load_imm(ACC, 0, s);
     }
   }
-  const auto [reg, offset] = codegen.allocate_symbol_on_stack(identifier);
-  emit_addiu(SP, SP, -WORD_SIZE, s);
-  emit_store(ACC, offset, reg, s);
+  const auto init_var_stack_offset = codegen.allocate_stack_space(1);
+  emit_store(ACC, init_var_stack_offset, FP, s);
+  codegen.push_symbol_location(identifier, { FP, init_var_stack_offset });
   body->code(s, codegen);
-  emit_addiu(SP, SP, WORD_SIZE, s);
-  codegen.deallocate_symbol_on_stack();
+  codegen.pop_symbol_location();
+  codegen.free_stack_space(1, true);
 }
 
 void create_object(Symbol type, ostream &s) {

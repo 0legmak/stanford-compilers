@@ -38,9 +38,11 @@ private:
    int get_label() override;
    void push(char* reg) override;
    void pop(char* reg) override;
+   int allocate_stack_space(int word_cnt) override;
+   void free_stack_space(int word_cnt, bool emit_code) override;
    SymbolLocation get_symbol_location(Symbol name) override;
-   SymbolLocation allocate_symbol_on_stack(Symbol name) override;
-   void deallocate_symbol_on_stack() override;
+   void push_symbol_location(Symbol name, SymbolLocation loc) override;
+   void pop_symbol_location() override;
    FindMethodResult find_method(Symbol class_name, Symbol method_name) override;
 	std::vector<int> create_jump_table(const std::vector<Symbol>& types) override;
 	char* get_filename() override;

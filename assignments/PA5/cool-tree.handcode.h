@@ -129,9 +129,11 @@ public:
 	virtual int get_label() = 0;
 	virtual void push(char* reg) = 0;
    	virtual void pop(char* reg) = 0;
+	virtual int allocate_stack_space(int word_cnt) = 0;
+	virtual void free_stack_space(int word_cnt, bool emit_code) = 0;
 	virtual SymbolLocation get_symbol_location(Symbol name) = 0;
-	virtual SymbolLocation allocate_symbol_on_stack(Symbol name) = 0;
-	virtual void deallocate_symbol_on_stack() = 0;
+	virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;
+	virtual void pop_symbol_location() = 0;
 	virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
 	virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
 	virtual char* get_filename() = 0;
