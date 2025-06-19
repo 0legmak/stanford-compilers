@@ -4,6 +4,7 @@
 #ifndef COOL_TREE_HANDCODE_H
 #define COOL_TREE_HANDCODE_H
 
+#include <memory>
 #include <iostream>
 #include <vector>
 #include "tree.h"
@@ -123,6 +124,10 @@ struct FindMethodResult {
 	const std::vector<Symbol>& arg_names;
 };
 
+struct Annotate {
+  virtual ~Annotate() {};
+};
+
 class CodeGenerator {
 public:
 	virtual ~CodeGenerator() {};
@@ -137,6 +142,7 @@ public:
 	virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
 	virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
 	virtual char* get_filename() = 0;
+	virtual std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) = 0;
 };
 
 #define Expression_EXTRAS                    \
