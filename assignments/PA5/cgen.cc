@@ -755,6 +755,14 @@ void CgenClassTable::code_class_name_and_object_tables() {
   }
 }
 
+void emit_assign(char* reg, int offset, ostream& s) {
+  emit_store(ACC, offset, reg, s);
+  if (cgen_Memmgr != GC_NOGC && strcmp(reg, SELF) == 0) {
+    emit_addiu(A1, SELF, offset * WORD_SIZE, s);
+    emit_jal("_GenGC_Assign", s);
+  }
+}
+
 void CgenClassTable::code_methods() {
   std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
@@ -786,7 +794,7 @@ void CgenClassTable::code_methods() {
     for (int i = 0; i < attr_count; ++i) {
       if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
         attr_exprs[i]->code(str, *this);
-        emit_store(ACC, DEFAULT_OBJFIELDS + i, SELF, str);
+        emit_assign(SELF, DEFAULT_OBJFIELDS + i, str);
       }
     }
     if (curr_fp_offset != -3) {
@@ -1281,7 +1289,7 @@ void assign_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
   expr->code(s, codegen);
   const auto [reg, offset] = codegen.get_symbol_location(name);
-  emit_store(ACC, offset, reg, s);
+  emit_assign(reg, offset, s);
 }
 
 void code_dispatch(
@@ -1297,11 +1305,10 @@ void code_dispatch(
   const auto [class_name, disp_table_index, arg_names] =
     codegen.find_method(dynamic ? expr->get_type() : type, method_name);
   const auto arg_cnt = arg_names.size();
-  const auto arg_stack_offset_start = codegen.allocate_stack_space(arg_cnt);
   for (int i = args->first(); args->more(i); i = args->next(i)) {
     const auto expr = args->nth(i);
     expr->code(s, codegen);
-    emit_store(ACC, arg_stack_offset_start - i, FP, s);
+    codegen.push(ACC);
   }
   expr->code(s, codegen);
   const auto dispatch_abort_label = codegen.get_label();
@@ -1461,15 +1468,15 @@ void create_object(Symbol type, ostream &s) {
 template <auto emit_arith_op>
 void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   codegen.push(ACC);
   e2->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
-  codegen.pop(T1);
-  emit_arith_op(ACC, T1, ACC, s);
   codegen.push(ACC);
   create_object(Int, s);
+  codegen.pop(T2);
+  emit_load(T2, DEFAULT_OBJFIELDS, T2, s);
   codegen.pop(T1);
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
+  emit_arith_op(T1, T1, T2, s);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
@@ -1496,11 +1503,11 @@ void divide_class::code(ostream &s, CodeGenerator& codegen) {
 void neg_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("neg", line_number);
   e1->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
-  emit_neg(ACC, ACC, s);
   codegen.push(ACC);
   create_object(Int, s);
   codegen.pop(T1);
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
+  emit_neg(T1, T1, s);
   emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
 }
 
@@ -1522,11 +1529,11 @@ void eq_class::code(ostream &s, CodeGenerator& codegen) {
 template<auto emit_cmp_branch>
 void code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   codegen.push(ACC);
   e2->code(s, codegen);
   emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
   codegen.pop(T1);
+  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
   const auto label_if_true = codegen.get_label();
   const auto label_end = codegen.get_label();
   emit_cmp_branch(T1, ACC, label_if_true, s);
