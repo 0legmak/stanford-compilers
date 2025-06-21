@@ -795,92 +795,6 @@ void CgenClassTable::code_class_name_and_object_tables() {
   }
 }
 
-void CgenClassTable::code_methods() {
-  std::vector<Symbol> attr_names;
-  std::vector<Expression> attr_exprs;
-  auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
-    current_class_node = node;
-    const auto class_name = node->get_name();
-    const auto features = node->get_features();
-    const auto prev_attrs_size = attr_exprs.size();
-    for (int i = features->first(); features->more(i); i = features->next(i)) {
-      const auto feature = features->nth(i);
-      if (!feature->is_method()) {
-        attr_names.push_back(feature->get_name());
-        attr_exprs.push_back(feature->get_expr());
-      }
-    }
-    const int attr_count = attr_names.size();
-    for (int i = 0; i < attr_count; ++i) {
-      push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
-    }
-
-    auto emit_prologue = [&]() {
-      emit_store(FP, 0, SP, str);
-      emit_move(FP, SP, str);
-      emit_store(RA, -1, FP, str);
-      emit_store(SELF, -2, FP, str);
-      emit_addiu(SP, SP, -3 * WORD_SIZE, str);
-      emit_move(SELF, ACC, str);
-      curr_fp_offset = -3;
-    };
-    auto emit_epilogue = [&](int arg_cnt) {
-      if (curr_fp_offset != -3) {
-        throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
-      }
-      emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
-      emit_load(SELF, -2, FP, str);
-      emit_load(RA, -1, FP, str);
-      emit_load(FP, 0, FP, str);
-      emit_return(str);
-    };
-
-    emit_init_ref(class_name, str); str << LABEL;
-    emit_prologue();
-    for (int i = 0; i < attr_count; ++i) {
-      if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
-        assign({ SELF, DEFAULT_OBJFIELDS + i }, attr_exprs[i]);
-      }
-    }
-    emit_move(ACC, SELF, str);
-    emit_epilogue(0);
-
-    if (!node->basic()) {
-      for (int i = features->first(); features->more(i); i = features->next(i)) {
-        const auto feature = features->nth(i);
-        if (!feature->is_method()) {
-          continue;
-        }
-        const auto formals = feature->get_formals();
-        const auto arg_cnt = formals->len();
-        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-          push_symbol_location(formals->nth(j)->get_name(), { FP, arg_cnt - j });
-        }
-
-        emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
-        emit_prologue();
-        feature->get_expr()->code(str, *this);
-        emit_epilogue(arg_cnt);
-
-        for (int j = 0; j < arg_cnt; ++j) {
-          pop_symbol_location();
-        }
-      }
-    }
-
-    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
-      process_class(process_class, child->hd());
-    }
-
-    for (size_t i = prev_attrs_size; i < attr_names.size(); ++i) {
-      pop_symbol_location();
-    }
-    attr_names.resize(prev_attrs_size);
-    attr_exprs.resize(prev_attrs_size);
-  };
-  process_class(process_class, root());
-}
-
 //********************************************************
 //
 // Emit code to reserve space for and initialize all of
@@ -1317,6 +1231,92 @@ struct AnnotateImpl : public Annotate {
 
 std::unique_ptr<Annotate> CgenClassTable::annotate(const std::string& message, int line_number) {
   return std::make_unique<AnnotateImpl>(str, message, line_number, annotation_indent);
+}
+
+void CgenClassTable::code_methods() {
+  std::vector<Symbol> attr_names;
+  std::vector<Expression> attr_exprs;
+  auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
+    current_class_node = node;
+    const auto class_name = node->get_name();
+    const auto features = node->get_features();
+    const auto prev_attrs_size = attr_exprs.size();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+      const auto feature = features->nth(i);
+      if (!feature->is_method()) {
+        attr_names.push_back(feature->get_name());
+        attr_exprs.push_back(feature->get_expr());
+      }
+    }
+    const int attr_count = attr_names.size();
+    for (int i = 0; i < attr_count; ++i) {
+      push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
+    }
+
+    auto emit_prologue = [&]() {
+      emit_store(FP, 0, SP, str);
+      emit_move(FP, SP, str);
+      emit_store(RA, -1, FP, str);
+      emit_store(SELF, -2, FP, str);
+      emit_addiu(SP, SP, -3 * WORD_SIZE, str);
+      emit_move(SELF, ACC, str);
+      curr_fp_offset = -3;
+    };
+    auto emit_epilogue = [&](int arg_cnt) {
+      if (curr_fp_offset != -3) {
+        throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
+      }
+      emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
+      emit_load(SELF, -2, FP, str);
+      emit_load(RA, -1, FP, str);
+      emit_load(FP, 0, FP, str);
+      emit_return(str);
+    };
+
+    emit_init_ref(class_name, str); str << LABEL;
+    emit_prologue();
+    for (int i = 0; i < attr_count; ++i) {
+      if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
+        assign({ SELF, DEFAULT_OBJFIELDS + i }, attr_exprs[i]);
+      }
+    }
+    emit_move(ACC, SELF, str);
+    emit_epilogue(0);
+
+    if (!node->basic()) {
+      for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (!feature->is_method()) {
+          continue;
+        }
+        const auto formals = feature->get_formals();
+        const auto arg_cnt = formals->len();
+        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+          push_symbol_location(formals->nth(j)->get_name(), { FP, arg_cnt - j });
+        }
+
+        emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
+        emit_prologue();
+        feature->get_expr()->code(str, *this);
+        emit_epilogue(arg_cnt);
+
+        for (int j = 0; j < arg_cnt; ++j) {
+          pop_symbol_location();
+        }
+      }
+    }
+
+    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
+      process_class(process_class, child->hd());
+    }
+
+    for (size_t i = prev_attrs_size; i < attr_names.size(); ++i) {
+      pop_symbol_location();
+    }
+    attr_names.resize(prev_attrs_size);
+    attr_exprs.resize(prev_attrs_size);
+  };
+  process_class(process_class, root());
 }
 
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
