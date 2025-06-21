@@ -111,5 +111,6 @@ class BoolConst
   BoolConst(int);
   void code_def(ostream&, int boolclasstag);
   void code_ref(ostream&) const;
+  bool get_val() const;
 };
 

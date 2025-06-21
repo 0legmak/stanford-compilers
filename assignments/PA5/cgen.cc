@@ -190,13 +190,39 @@ static void emit_load_bool(char *dest, const BoolConst& b, ostream& s)
 {
   emit_partial_load_address(dest,s);
   b.code_ref(s);
+  s << "  # " << (b.get_val() ? "true" : "false") << ENDL;
   s << ENDL;
+}
+
+static std::string escape_string(const std::string& input) {
+  std::string result;
+  for (char c : input) {
+    switch (c) {
+      case '\n': result += "\\n"; break;
+      case '\t': result += "\\t"; break;
+      case '\r': result += "\\r"; break;
+      case '\\': result += "\\\\"; break;
+      case '\"': result += "\\\""; break;
+      case '\b': result += "\\b"; break;
+      case '\f': result += "\\f"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 32 || static_cast<unsigned char>(c) == 127) {
+          char buf[5];
+          snprintf(buf, sizeof(buf), "\\x%02x", static_cast<unsigned char>(c));
+          result += buf;
+        } else {
+          result += c;
+        }
+    }
+  }
+  return result;
 }
 
 static void emit_load_string(char *dest, StringEntry *str, ostream& s)
 {
   emit_partial_load_address(dest,s);
   str->code_ref(s);
+  s << "  # \"" << escape_string(str->get_string()) << "\"" << ENDL;
   s << ENDL;
 }
 
@@ -204,6 +230,7 @@ static void emit_load_int(char *dest, IntEntry *i, ostream& s)
 {
   emit_partial_load_address(dest,s);
   i->code_ref(s);
+  s << "  # " << i->get_string() << ENDL;
   s << ENDL;
 }
 
@@ -520,6 +547,10 @@ void BoolConst::code_def(ostream& s, int boolclasstag)
       s << WORD << val << ENDL;                             // value (0 or 1)
 }
 
+bool BoolConst::get_val() const {
+  return !!val;
+}
+
 bool method_class::is_method() {
   return true;
 }
@@ -753,7 +784,9 @@ void CgenClassTable::code_class_name_and_object_tables() {
   }
   str << CLASSNAMETAB << LABEL;
   for (const auto entry : class_str_table) {
-    str << WORD; entry->code_ref(str); str << ENDL;
+    str << WORD;
+    entry->code_ref(str);
+    str << "  # \"" << escape_string(entry->get_string()) << "\"" << ENDL;
   }
   str << CLASSOBJTAB << LABEL;
   for (const auto entry : class_sym_table) {
@@ -1568,33 +1601,18 @@ void comp_class::code(ostream &s, CodeGenerator& codegen) {
   emit_label_def(label_end, s);
 }
 
-void int_const_class::code(ostream& s, CodeGenerator& codegen)  
-{
-  auto a = codegen.annotate(std::string("const ") + token->get_string(), line_number);
+void int_const_class::code(ostream& s, CodeGenerator& codegen) {
   //
   // Need to be sure we have an IntEntry *, not an arbitrary Symbol
   //
-  emit_load_int(ACC,inttable.lookup_string(token->get_string()),s);
+  emit_load_int(ACC, inttable.lookup_string(token->get_string()), s);
 }
 
-void string_const_class::code(ostream& s, CodeGenerator& codegen)
-{
-  std::ostringstream st;
-  std::string clean_token = token->get_string();
-  clean_token.erase(
-    std::remove_if(clean_token.begin(), clean_token.end(),
-      [](unsigned char c) { return std::iscntrl(c); }
-    ),
-    clean_token.end()
-  );
-  st << "const " << std::quoted(clean_token);
-  auto a = codegen.annotate(st.str(), line_number);
-  emit_load_string(ACC,stringtable.lookup_string(token->get_string()),s);
+void string_const_class::code(ostream& s, CodeGenerator& codegen) {
+  emit_load_string(ACC, stringtable.lookup_string(token->get_string()), s);
 }
 
-void bool_const_class::code(ostream& s, CodeGenerator& codegen)
-{
-  auto a = codegen.annotate(std::string("const ") + (val ? "true" : "false"), line_number);
+void bool_const_class::code(ostream& s, CodeGenerator& codegen) {
   emit_load_bool(ACC, BoolConst(val), s);
 }
 
