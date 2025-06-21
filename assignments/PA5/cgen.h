@@ -36,9 +36,10 @@ private:
    CgenNode* current_class_node = nullptr;
    int annotation_indent = 0;
 
-   int get_label() override;
+   int create_label() override;
    void push(char* reg) override;
    void pop(char* reg) override;
+   void assign(SymbolLocation loc, Expression expr) override;
    int allocate_stack_space(int word_cnt) override;
    void free_stack_space(int word_cnt, bool emit_code) override;
    SymbolLocation get_symbol_location(Symbol name) override;

@@ -353,6 +353,13 @@ static void emit_fetch_int(char *dest, char *source, ostream& s)
 static void emit_store_int(char *source, char *dest, ostream& s)
 { emit_store(source, DEFAULT_OBJFIELDS, dest, s); }
 
+static void emit_fetch_bool(char *dest, char *source, ostream& s) {
+  emit_load(dest, DEFAULT_OBJFIELDS, source, s);
+}
+
+static void emit_slti(char *dest, char *source, int imm, ostream& s) {
+  s << SLTI << dest << " " << source << " " << imm << ENDL;
+}
 
 static void emit_test_collector(ostream &s)
 {
@@ -755,14 +762,6 @@ void CgenClassTable::code_class_name_and_object_tables() {
   }
 }
 
-void emit_assign(char* reg, int offset, ostream& s) {
-  emit_store(ACC, offset, reg, s);
-  if (cgen_Memmgr != GC_NOGC && strcmp(reg, SELF) == 0) {
-    emit_addiu(A1, SELF, offset * WORD_SIZE, s);
-    emit_jal("_GenGC_Assign", s);
-  }
-}
-
 void CgenClassTable::code_methods() {
   std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
@@ -783,29 +782,35 @@ void CgenClassTable::code_methods() {
       push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
     }
 
+    auto emit_prologue = [&]() {
+      emit_store(FP, 0, SP, str);
+      emit_move(FP, SP, str);
+      emit_store(RA, -1, FP, str);
+      emit_store(SELF, -2, FP, str);
+      emit_addiu(SP, SP, -3 * WORD_SIZE, str);
+      emit_move(SELF, ACC, str);
+      curr_fp_offset = -3;
+    };
+    auto emit_epilogue = [&](int arg_cnt) {
+      if (curr_fp_offset != -3) {
+        throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
+      }
+      emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
+      emit_load(SELF, -2, FP, str);
+      emit_load(RA, -1, FP, str);
+      emit_load(FP, 0, FP, str);
+      emit_return(str);
+    };
+
     emit_init_ref(class_name, str); str << LABEL;
-    emit_store(FP, 0, SP, str);
-    emit_move(FP, SP, str);
-    emit_store(RA, -1, FP, str);
-    emit_store(SELF, -2, FP, str);
-    emit_addiu(SP, SP, -3 * WORD_SIZE, str);
-    emit_move(SELF, ACC, str);
-    curr_fp_offset = -3;
+    emit_prologue();
     for (int i = 0; i < attr_count; ++i) {
       if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
-        attr_exprs[i]->code(str, *this);
-        emit_assign(SELF, DEFAULT_OBJFIELDS + i, str);
+        assign({ SELF, DEFAULT_OBJFIELDS + i }, attr_exprs[i]);
       }
     }
-    if (curr_fp_offset != -3) {
-      throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
-    }
     emit_move(ACC, SELF, str);
-    emit_addiu(SP, SP, 3 * WORD_SIZE, str);
-    emit_load(SELF, -2, FP, str);
-    emit_load(RA, -1, FP, str);
-    emit_load(FP, 0, FP, str);
-    emit_return(str);
+    emit_epilogue(0);
 
     if (!node->basic()) {
       for (int i = features->first(); features->more(i); i = features->next(i)) {
@@ -820,22 +825,9 @@ void CgenClassTable::code_methods() {
         }
 
         emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
-        emit_store(FP, 0, SP, str);
-        emit_move(FP, SP, str);
-        emit_store(RA, -1, FP, str);
-        emit_store(SELF, -2, FP, str);
-        emit_addiu(SP, SP, -3 * WORD_SIZE, str);
-        emit_move(SELF, ACC, str);
-        curr_fp_offset = -3;
+        emit_prologue();
         feature->get_expr()->code(str, *this);
-        if (curr_fp_offset != -3) {
-          throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
-        }
-        emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
-        emit_load(SELF, -2, FP, str);
-        emit_load(RA, -1, FP, str);
-        emit_load(FP, 0, FP, str);
-        emit_return(str);
+        emit_epilogue(arg_cnt);
 
         for (int j = 0; j < arg_cnt; ++j) {
           pop_symbol_location();
@@ -1147,7 +1139,7 @@ CgenNode::CgenNode(Class_ nd, Basicness bstatus, CgenClassTableP ct) :
 //
 //*****************************************************************
 
-int CgenClassTable::get_label() {
+int CgenClassTable::create_label() {
   return label_id++;
 }
 
@@ -1164,6 +1156,15 @@ void CgenClassTable::pop(char* reg) {
   ++curr_fp_offset;
   if (cgen_debug) {
     std::cerr << "Popping " << reg << " from stack, current FP offset: " << curr_fp_offset << std::endl;
+  }
+}
+
+void CgenClassTable::assign(SymbolLocation loc, Expression expr) {
+  expr->code(str, *this);
+  emit_store(ACC, loc.offset, loc.reg, str);
+  if (cgen_Memmgr != GC_NOGC && strcmp(loc.reg, SELF) == 0) {
+    emit_addiu(A1, SELF, loc.offset * WORD_SIZE, str);
+    emit_gc_assign(str);
   }
 }
 
@@ -1287,9 +1288,7 @@ std::unique_ptr<Annotate> CgenClassTable::annotate(const std::string& message, i
 
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
-  expr->code(s, codegen);
-  const auto [reg, offset] = codegen.get_symbol_location(name);
-  emit_assign(reg, offset, s);
+  codegen.assign(codegen.get_symbol_location(name), expr);
 }
 
 void code_dispatch(
@@ -1311,8 +1310,8 @@ void code_dispatch(
     codegen.push(ACC);
   }
   expr->code(s, codegen);
-  const auto dispatch_abort_label = codegen.get_label();
-  const auto end_label = codegen.get_label();
+  const auto dispatch_abort_label = codegen.create_label();
+  const auto end_label = codegen.create_label();
   emit_beqz(ACC, dispatch_abort_label, s);
   if (dynamic) {
     emit_load(T1, DISPTABLE_OFFSET, ACC, s);
@@ -1342,10 +1341,10 @@ void dispatch_class::code(ostream &s, CodeGenerator& codegen) {
 
 void cond_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("if", line_number);
-  const auto label_if_false = codegen.get_label();
-  const auto label_end = codegen.get_label();
+  const auto label_if_false = codegen.create_label();
+  const auto label_end = codegen.create_label();
   pred->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_fetch_bool(ACC, ACC, s);
   emit_beqz(ACC, label_if_false, s);
   then_exp->code(s, codegen);
   emit_branch(label_end, s);
@@ -1356,11 +1355,11 @@ void cond_class::code(ostream &s, CodeGenerator& codegen) {
 
 void loop_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("loop", line_number);
-  const auto label_start = codegen.get_label();
-  const auto label_end = codegen.get_label();
+  const auto label_start = codegen.create_label();
+  const auto label_end = codegen.create_label();
   emit_label_def(label_start, s);
   pred->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_fetch_bool(ACC, ACC, s);
   emit_beqz(ACC, label_end, s);
   body->code(s, codegen);
   emit_branch(label_start, s);
@@ -1378,15 +1377,15 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   for (int i = cases->first(); cases->more(i); i = cases->next(i)) {
     const auto cas = cases->nth(i);
     types[i] = cas->get_type();
-    case_labels[i] = codegen.get_label();
+    case_labels[i] = codegen.create_label();
     case_expr[i] = cas->get_expr();
     case_vars[i] = cas->get_name();
   }
   const auto jump_table = codegen.create_jump_table(types);
-  const auto jump_table_label = codegen.get_label();
-  const auto case_end_label = codegen.get_label();
-  const auto case_abort_label = codegen.get_label();
-  const auto case_abort2_label = codegen.get_label();
+  const auto jump_table_label = codegen.create_label();
+  const auto case_end_label = codegen.create_label();
+  const auto case_abort_label = codegen.create_label();
+  const auto case_abort2_label = codegen.create_label();
   
   expr->code(s, codegen);
   emit_beqz(ACC, case_abort2_label, s);
@@ -1473,11 +1472,11 @@ void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen
   codegen.push(ACC);
   create_object(Int, s);
   codegen.pop(T2);
-  emit_load(T2, DEFAULT_OBJFIELDS, T2, s);
+  emit_fetch_int(T2, T2, s);
   codegen.pop(T1);
-  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
+  emit_fetch_int(T1, T1, s);
   emit_arith_op(T1, T1, T2, s);
-  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
+  emit_store_int(T1, ACC, s);
 }
 
 void plus_class::code(ostream &s, CodeGenerator& codegen) {
@@ -1506,9 +1505,9 @@ void neg_class::code(ostream &s, CodeGenerator& codegen) {
   codegen.push(ACC);
   create_object(Int, s);
   codegen.pop(T1);
-  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
+  emit_fetch_int(T1, T1, s);
   emit_neg(T1, T1, s);
-  emit_store(T1, DEFAULT_OBJFIELDS, ACC, s);
+  emit_store_int(T1, ACC, s);
 }
 
 void eq_class::code(ostream &s, CodeGenerator& codegen) {
@@ -1518,7 +1517,7 @@ void eq_class::code(ostream &s, CodeGenerator& codegen) {
   e2->code(s, codegen);
   emit_move(T2, ACC, s);
   codegen.pop(T1);
-  const auto eq_label = codegen.get_label();
+  const auto eq_label = codegen.create_label();
   emit_load_bool(ACC, truebool, s);
   emit_beq(T1, T2, eq_label, s);
   emit_load_bool(A1, falsebool, s);
@@ -1531,11 +1530,11 @@ void code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& co
   e1->code(s, codegen);
   codegen.push(ACC);
   e2->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
+  emit_fetch_int(ACC, ACC, s);
   codegen.pop(T1);
-  emit_load(T1, DEFAULT_OBJFIELDS, T1, s);
-  const auto label_if_true = codegen.get_label();
-  const auto label_end = codegen.get_label();
+  emit_fetch_int(T1, T1, s);
+  const auto label_if_true = codegen.create_label();
+  const auto label_end = codegen.create_label();
   emit_cmp_branch(T1, ACC, label_if_true, s);
   emit_load_bool(ACC, falsebool, s);
   emit_branch(label_end, s);
@@ -1557,10 +1556,10 @@ void leq_class::code(ostream &s, CodeGenerator& codegen) {
 void comp_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("not", line_number);
   e1->code(s, codegen);
-  emit_load(ACC, DEFAULT_OBJFIELDS, ACC, s);
-  s << SLTI << ACC << "\t" << ACC << "\t" << 1 << ENDL;
-  const auto label_if_zero = codegen.get_label();
-  const auto label_end = codegen.get_label();
+  emit_fetch_bool(ACC, ACC, s);
+  emit_slti(ACC, ACC, 1, s);
+  const auto label_if_zero = codegen.create_label();
+  const auto label_end = codegen.create_label();
   emit_beqz(ACC, label_if_zero, s);
   emit_load_bool(ACC, truebool, s);
   emit_branch(label_end, s);
@@ -1620,8 +1619,8 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
 void isvoid_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("isvoid", line_number);
   e1->code(s, codegen);
-  const auto label_if_zero = codegen.get_label();
-  const auto label_end = codegen.get_label();
+  const auto label_if_zero = codegen.create_label();
+  const auto label_end = codegen.create_label();
   emit_beqz(ACC, label_if_zero, s);
   emit_load_bool(ACC, falsebool, s);
   emit_branch(label_end, s);

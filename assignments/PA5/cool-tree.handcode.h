@@ -131,9 +131,10 @@ struct Annotate {
 class CodeGenerator {
 public:
 	virtual ~CodeGenerator() {};
-	virtual int get_label() = 0;
+	virtual int create_label() = 0;
 	virtual void push(char* reg) = 0;
    	virtual void pop(char* reg) = 0;
+	virtual void assign(SymbolLocation loc, Expression expr) = 0;
 	virtual int allocate_stack_space(int word_cnt) = 0;
 	virtual void free_stack_space(int word_cnt, bool emit_code) = 0;
 	virtual SymbolLocation get_symbol_location(Symbol name) = 0;
