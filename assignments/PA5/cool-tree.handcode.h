@@ -4,12 +4,11 @@
 #ifndef COOL_TREE_HANDCODE_H
 #define COOL_TREE_HANDCODE_H
 
-#include <memory>
 #include <iostream>
-#include <vector>
 #include "tree.h"
 #include "cool.h"
 #include "stringtab.h"
+#include "cgen-itf.h"
 #define yylineno curr_lineno;
 extern int yylineno;
 
@@ -112,39 +111,6 @@ void dump_with_types(ostream& ,int); \
 Symbol get_name() override { return name; } \
 Symbol get_type() override { return type_decl; } \
 Expression get_expr() override { return expr; } \
-
-struct SymbolLocation {
-	char* reg;
-	int offset;
-};
-
-struct FindMethodResult {
-	Symbol class_name;
-	int dispatch_table_index;
-	const std::vector<Symbol>& arg_names;
-};
-
-struct Annotate {
-  virtual ~Annotate() {};
-};
-
-class CodeGenerator {
-public:
-	virtual ~CodeGenerator() {};
-	virtual int create_label() = 0;
-	virtual void push(char* reg) = 0;
-   	virtual void pop(char* reg) = 0;
-	virtual void assign(SymbolLocation loc, Expression expr) = 0;
-	virtual int allocate_stack_space(int word_cnt) = 0;
-	virtual void free_stack_space(int word_cnt, bool emit_code) = 0;
-	virtual SymbolLocation get_symbol_location(Symbol name) = 0;
-	virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;
-	virtual void pop_symbol_location() = 0;
-	virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
-	virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
-	virtual char* get_filename() = 0;
-	virtual std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) = 0;
-};
 
 #define Expression_EXTRAS                    \
 Symbol type;                                 \

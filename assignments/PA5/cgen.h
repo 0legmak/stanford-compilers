@@ -37,8 +37,8 @@ private:
    int annotation_indent = 0;
 
    int create_label() override;
-   void push(char* reg) override;
-   void pop(char* reg) override;
+   void push(Register reg) override;
+   void pop(Register reg) override;
    void assign(SymbolLocation loc, Expression expr) override;
    int allocate_stack_space(int word_cnt) override;
    void free_stack_space(int word_cnt, bool emit_code) override;

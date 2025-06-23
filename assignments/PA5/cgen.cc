@@ -77,6 +77,79 @@ Symbol
 StringEntryP empty_string;
 IntEntryP zero_int;
 
+using Register::ZERO;
+using Register::AT;
+using Register::V0;
+using Register::V1;
+using Register::A0;
+using Register::A1;
+using Register::A2;
+using Register::A3;
+using Register::T0;
+using Register::T1;
+using Register::T2;
+using Register::T3;
+using Register::T4;
+using Register::T5;
+using Register::T6;
+using Register::T7;
+using Register::S0;
+using Register::S1;
+using Register::S2;
+using Register::S3;
+using Register::S4;
+using Register::S5;
+using Register::S6;
+using Register::S7;
+using Register::T8;
+using Register::T9;
+using Register::K0;
+using Register::K1;
+using Register::GP;
+using Register::SP;
+using Register::FP;
+using Register::RA;
+using Register::ACC;
+using Register::SELF;
+
+constexpr const char* rn(Register reg) {
+  switch (reg) {
+    case ZERO: return "$zero";
+    case AT:   return "$at";
+    case V0:   return "$v0";
+    case V1:   return "$v1";
+    case A0:   return "$a0";
+    case A1:   return "$a1";
+    case A2:   return "$a2";
+    case A3:   return "$a3";
+    case T0:   return "$t0";
+    case T1:   return "$t1";
+    case T2:   return "$t2";
+    case T3:   return "$t3";
+    case T4:   return "$t4";
+    case T5:   return "$t5";
+    case T6:   return "$t6";
+    case T7:   return "$t7";
+    case S0:   return "$s0";
+    case S1:   return "$s1";
+    case S2:   return "$s2";
+    case S3:   return "$s3";
+    case S4:   return "$s4";
+    case S5:   return "$s5";
+    case S6:   return "$s6";
+    case S7:   return "$s7";
+    case T8:   return "$t8";
+    case T9:   return "$t9";
+    case K0:   return "$k0";
+    case K1:   return "$k1";
+    case GP:   return "$gp";
+    case SP:   return "$sp";
+    case FP:   return "$fp";
+    case RA:   return "$ra";
+    default:   return "<unknown>";
+  }
+}
+
 //
 // Initializing the predefined symbols.
 //
@@ -165,28 +238,28 @@ void program_class::cgen(ostream &os)
 //
 //////////////////////////////////////////////////////////////////////////////
 
-static void emit_load(char *dest_reg, int offset, char *source_reg, ostream& s)
+static void emit_load(Register dest_reg, int offset, Register source_reg, ostream& s)
 {
-  s << LW << dest_reg << " " << offset * WORD_SIZE << "(" << source_reg << ")" 
+  s << LW << rn(dest_reg) << " " << offset * WORD_SIZE << "(" << rn(source_reg) << ")" 
     << ENDL;
 }
 
-static void emit_store(char *source_reg, int offset, char *dest_reg, ostream& s)
+static void emit_store(Register source_reg, int offset, Register dest_reg, ostream& s)
 {
-  s << SW << source_reg << " " << offset * WORD_SIZE << "(" << dest_reg << ")"
+  s << SW << rn(source_reg) << " " << offset * WORD_SIZE << "(" << rn(dest_reg) << ")"
       << ENDL;
 }
 
-static void emit_load_imm(char *dest_reg, int val, ostream& s)
-{ s << LI << dest_reg << " " << val << ENDL; }
+static void emit_load_imm(Register dest_reg, int val, ostream& s)
+{ s << LI << rn(dest_reg) << " " << val << ENDL; }
 
-static void emit_load_address(char *dest_reg, char *address, ostream& s)
-{ s << LA << dest_reg << " " << address << ENDL; }
+static void emit_load_address(Register dest_reg, char *address, ostream& s)
+{ s << LA << rn(dest_reg) << " " << address << ENDL; }
 
-static void emit_partial_load_address(char *dest_reg, ostream& s)
-{ s << LA << dest_reg << " "; }
+static void emit_partial_load_address(Register dest_reg, ostream& s)
+{ s << LA << rn(dest_reg) << " "; }
 
-static void emit_load_bool(char *dest, const BoolConst& b, ostream& s)
+static void emit_load_bool(Register dest, const BoolConst& b, ostream& s)
 {
   emit_partial_load_address(dest,s);
   b.code_ref(s);
@@ -218,7 +291,7 @@ static std::string escape_string(const std::string& input) {
   return result;
 }
 
-static void emit_load_string(char *dest, StringEntry *str, ostream& s)
+static void emit_load_string(Register dest, StringEntry *str, ostream& s)
 {
   emit_partial_load_address(dest,s);
   str->code_ref(s);
@@ -226,7 +299,7 @@ static void emit_load_string(char *dest, StringEntry *str, ostream& s)
   s << ENDL;
 }
 
-static void emit_load_int(char *dest, IntEntry *i, ostream& s)
+static void emit_load_int(Register dest, IntEntry *i, ostream& s)
 {
   emit_partial_load_address(dest,s);
   i->code_ref(s);
@@ -234,41 +307,41 @@ static void emit_load_int(char *dest, IntEntry *i, ostream& s)
   s << ENDL;
 }
 
-static void emit_move(char *dest_reg, char *source_reg, ostream& s)
-{ s << MOVE << dest_reg << " " << source_reg << ENDL; }
+static void emit_move(Register dest_reg, Register source_reg, ostream& s)
+{ s << MOVE << rn(dest_reg) << " " << rn(source_reg) << ENDL; }
 
-static void emit_neg(char *dest, char *src1, ostream& s)
-{ s << NEG << dest << " " << src1 << ENDL; }
+static void emit_neg(Register dest, Register src1, ostream& s)
+{ s << NEG << rn(dest) << " " << rn(src1) << ENDL; }
 
-static void emit_add(char *dest, char *src1, char *src2, ostream& s)
-{ s << ADD << dest << " " << src1 << " " << src2 << ENDL; }
+static void emit_add(Register dest, Register src1, Register src2, ostream& s)
+{ s << ADD << rn(dest) << " " << rn(src1) << " " << rn(src2) << ENDL; }
 
-static void emit_addu(char *dest, char *src1, char *src2, ostream& s)
-{ s << ADDU << dest << " " << src1 << " " << src2 << ENDL; }
+static void emit_addu(Register dest, Register src1, Register src2, ostream& s)
+{ s << ADDU << rn(dest) << " " << rn(src1) << " " << rn(src2) << ENDL; }
 
-static void emit_addiu(char *dest, char *src1, int imm, ostream& s)
-{ s << ADDIU << dest << " " << src1 << " " << imm << ENDL; }
+static void emit_addiu(Register dest, Register src, int imm, ostream& s)
+{ s << ADDIU << rn(dest) << " " << rn(src) << " " << imm << ENDL; }
 
-static void emit_div(char *dest, char *src1, char *src2, ostream& s)
-{ s << DIV << dest << " " << src1 << " " << src2 << ENDL; }
+static void emit_div(Register dest, Register src1, Register src2, ostream& s)
+{ s << DIV << rn(dest) << " " << rn(src1) << " " << rn(src2) << ENDL; }
 
-static void emit_mul(char *dest, char *src1, char *src2, ostream& s)
-{ s << MUL << dest << " " << src1 << " " << src2 << ENDL; }
+static void emit_mul(Register dest, Register src1, Register src2, ostream& s)
+{ s << MUL << rn(dest) << " " << rn(src1) << " " << rn(src2) << ENDL; }
 
-static void emit_sub(char *dest, char *src1, char *src2, ostream& s)
-{ s << SUB << dest << " " << src1 << " " << src2 << ENDL; }
+static void emit_sub(Register dest, Register src1, Register src2, ostream& s)
+{ s << SUB << rn(dest) << " " << rn(src1) << " " << rn(src2) << ENDL; }
 
-static void emit_sll(char *dest, char *src1, int num, ostream& s)
-{ s << SLL << dest << " " << src1 << " " << num << ENDL; }
+static void emit_sll(Register dest, Register src1, int num, ostream& s)
+{ s << SLL << rn(dest) << " " << rn(src1) << " " << num << ENDL; }
 
-static void emit_jalr(char *dest, ostream& s)
-{ s << JALR << dest << ENDL; }
+static void emit_jalr(Register dest, ostream& s)
+{ s << JALR << rn(dest) << ENDL; }
 
 static void emit_jal(char *address,ostream &s)
 { s << JAL << address << ENDL; }
 
 static void emit_return(ostream& s)
-{ s << RET << ENDL; }
+{ s << JR << rn(RA) << ENDL; }
 
 static void emit_gc_assign(ostream& s)
 { s << JAL << "_GenGC_Assign" << ENDL; }
@@ -294,51 +367,51 @@ static void emit_label_def(int l, ostream &s)
   s << ":" << ENDL;
 }
 
-static void emit_beqz(char *source, int label, ostream &s)
+static void emit_beqz(Register source, int label, ostream &s)
 {
-  s << BEQZ << source << " ";
+  s << BEQZ << rn(source) << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_beq(char *src1, char *src2, int label, ostream &s)
+static void emit_beq(Register src1, Register src2, int label, ostream &s)
 {
-  s << BEQ << src1 << " " << src2 << " ";
+  s << BEQ << rn(src1) << " " << rn(src2) << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_bne(char *src1, char *src2, int label, ostream &s)
+static void emit_bne(Register src1, Register src2, int label, ostream &s)
 {
-  s << BNE << src1 << " " << src2 << " ";
+  s << BNE << rn(src1) << " " << rn(src2) << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_bleq(char *src1, char *src2, int label, ostream &s)
+static void emit_bleq(Register src1, Register src2, int label, ostream &s)
 {
-  s << BLEQ << src1 << " " << src2 << " ";
+  s << BLEQ << rn(src1) << " " << rn(src2) << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_blt(char *src1, char *src2, int label, ostream &s)
+static void emit_blt(Register src1, Register src2, int label, ostream &s)
 {
-  s << BLT << src1 << " " << src2 << " ";
+  s << BLT << rn(src1) << " " << rn(src2) << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_blti(char *src1, int imm, int label, ostream &s)
+static void emit_blti(Register src1, int imm, int label, ostream &s)
 {
-  s << BLT << src1 << " " << imm << " ";
+  s << BLT << rn(src1) << " " << imm << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
 
-static void emit_bgti(char *src1, int imm, int label, ostream &s)
+static void emit_bgti(Register src1, int imm, int label, ostream &s)
 {
-  s << BGT << src1 << " " << imm << " ";
+  s << BGT << rn(src1) << " " << imm << " ";
   emit_label_ref(label,s);
   s << ENDL;
 }
@@ -353,13 +426,13 @@ static void emit_branch(int l, ostream& s)
 //
 // Push a register on the stack. The stack grows towards smaller addresses.
 //
-static void emit_push(char *reg, ostream& str)
+static void emit_push(Register reg, ostream& str)
 {
   emit_store(reg,0,SP,str);
   emit_addiu(SP,SP,-4,str);
 }
 
-static void emit_pop(char *reg, ostream& str)
+static void emit_pop(Register reg, ostream& str)
 {
   emit_addiu(SP, SP, WORD_SIZE, str);
   emit_load(reg, 0, SP, str);
@@ -370,22 +443,22 @@ static void emit_pop(char *reg, ostream& str)
 // Emits code to fetch the integer value of the Integer object pointed
 // to by register source into the register dest
 //
-static void emit_fetch_int(char *dest, char *source, ostream& s)
+static void emit_fetch_int(Register dest, Register source, ostream& s)
 { emit_load(dest, DEFAULT_OBJFIELDS, source, s); }
 
 //
 // Emits code to store the integer value contained in register source
 // into the Integer object pointed to by dest.
 //
-static void emit_store_int(char *source, char *dest, ostream& s)
+static void emit_store_int(Register source, Register dest, ostream& s)
 { emit_store(source, DEFAULT_OBJFIELDS, dest, s); }
 
-static void emit_fetch_bool(char *dest, char *source, ostream& s) {
+static void emit_fetch_bool(Register dest, Register source, ostream& s) {
   emit_load(dest, DEFAULT_OBJFIELDS, source, s);
 }
 
-static void emit_slti(char *dest, char *source, int imm, ostream& s) {
-  s << SLTI << dest << " " << source << " " << imm << ENDL;
+static void emit_slti(Register dest, Register source, int imm, ostream& s) {
+  s << SLTI << rn(dest) << " " << rn(source) << " " << imm << ENDL;
 }
 
 static void emit_test_collector(ostream &s)
@@ -398,9 +471,9 @@ static void emit_test_collector(ostream &s)
   emit_load(ACC,0,SP,s);
 }
 
-static void emit_gc_check(char *source, ostream &s)
+static void emit_gc_check(Register source, ostream &s)
 {
-  if (source != (char*)A1) emit_move(A1, source, s);
+  if (source != A1) emit_move(A1, source, s);
   s << JAL << "_gc_check" << ENDL;
 }
 
@@ -1090,26 +1163,26 @@ int CgenClassTable::create_label() {
   return label_id++;
 }
 
-void CgenClassTable::push(char* reg) {
+void CgenClassTable::push(Register reg) {
   emit_push(reg, str);
   --curr_fp_offset;
   if (cgen_debug) {
-    std::cerr << "Pushing " << reg << " to stack, current FP offset: " << curr_fp_offset << std::endl;
+    std::cerr << "Pushing " << rn(reg) << " to stack, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
-void CgenClassTable::pop(char* reg) {
+void CgenClassTable::pop(Register reg) {
   emit_pop(reg, str);
   ++curr_fp_offset;
   if (cgen_debug) {
-    std::cerr << "Popping " << reg << " from stack, current FP offset: " << curr_fp_offset << std::endl;
+    std::cerr << "Popping " << rn(reg) << " from stack, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
 void CgenClassTable::assign(SymbolLocation loc, Expression expr) {
   expr->code(str, *this);
   emit_store(ACC, loc.offset, loc.reg, str);
-  if (cgen_Memmgr != GC_NOGC && strcmp(loc.reg, SELF) == 0) {
+  if (cgen_Memmgr != GC_NOGC && loc.reg == SELF) {
     emit_addiu(A1, SELF, loc.offset * WORD_SIZE, str);
     emit_gc_assign(str);
   }
@@ -1144,7 +1217,7 @@ void CgenClassTable::free_stack_space(int word_cnt, bool emit_code) {
 SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
   const auto loc = symbol_environment.at(name).top();
   if (cgen_debug) {
-    std::cerr << "Found symbol " << name << " at location " << loc.offset << "(" << loc.reg << ")" << std::endl;
+    std::cerr << "Found symbol " << name << " at location " << loc.offset << "(" << rn(loc.reg) << ")" << std::endl;
   }
   return loc;
 }
@@ -1154,7 +1227,7 @@ void CgenClassTable::push_symbol_location(Symbol name, SymbolLocation loc) {
   auto& locs = symbol_environment[name];
   locs.push(loc);
   if (cgen_debug) {
-    std::cerr << "Created symbol " << name << " at location " << loc.offset << "(" << loc.reg << ")" << std::endl;
+    std::cerr << "Created symbol " << name << " at location " << loc.offset << "(" << rn(loc.reg) << ")" << std::endl;
   }
 }
 
@@ -1162,7 +1235,7 @@ void CgenClassTable::pop_symbol_location() {
   auto& locs = symbol_environment.at(stack_symbols.top());
   if (cgen_debug) {
     std::cerr << "Deleted symbol " << stack_symbols.top() << " at location "
-      << locs.top().offset << "(" << locs.top().reg << ")" << std::endl;
+      << locs.top().offset << "(" << rn(locs.top().reg) << ")" << std::endl;
   }
   locs.pop();
   stack_symbols.pop();
