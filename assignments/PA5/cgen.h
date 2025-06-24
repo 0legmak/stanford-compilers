@@ -58,6 +58,19 @@ private:
    std::stack<SymbolLocation> temporaries_stack;
    std::vector<Register> registers_for_temporaries;
    size_t registers_used_cnt = 0;
+   struct DispatchAbort {
+      StringEntryP file_name;
+      int line_number;
+      bool operator==(const DispatchAbort& other) const = default;
+      struct Hash {
+         std::size_t operator()(const DispatchAbort& da) const {
+            const auto h1 = std::hash<StringEntryP>()(da.file_name);
+            const auto h2 = std::hash<int>()(da.line_number);
+            return h1 ^ (h2 * 63689);
+         }
+      };
+   };
+   std::unordered_map<DispatchAbort, int, DispatchAbort::Hash> dispatch_abort_labels;
 
    // stats from phase 1
    size_t temporaries_used = 0;
@@ -75,6 +88,7 @@ private:
 	std::vector<int> create_jump_table(const std::vector<Symbol>& types) override;
 	char* get_filename() override;
 	std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) override;
+   int get_dispatch_abort_label(StringEntryP file_name, int line_number) override;
 
 
 // The following methods emit code for
@@ -88,6 +102,7 @@ private:
    void code_dispatch_table_and_prototype_objects();
    void code_class_name_and_object_tables();
    void code_methods();
+   void code_dispatch_abort_handlers();
 
 // The following creates an inheritance graph from
 // a list of classes.  The graph is implemented as

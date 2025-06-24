@@ -75,4 +75,5 @@ public:
   virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
   virtual char* get_filename() = 0;
   virtual std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) = 0;
+  virtual int get_dispatch_abort_label(StringEntryP file_name, int line_number) = 0;
 };

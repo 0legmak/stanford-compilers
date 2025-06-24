@@ -265,7 +265,6 @@ static void emit_load_bool(Register dest, const BoolConst& b, ostream& s)
   emit_partial_load_address(dest,s);
   b.code_ref(s);
   s << "  # " << (b.get_val() ? "true" : "false") << ENDL;
-  s << ENDL;
 }
 
 static std::string escape_string(const std::string& input) {
@@ -297,7 +296,6 @@ static void emit_load_string(Register dest, StringEntry *str, ostream& s)
   emit_partial_load_address(dest,s);
   str->code_ref(s);
   s << "  # \"" << escape_string(str->get_string()) << "\"" << ENDL;
-  s << ENDL;
 }
 
 static void emit_load_int(Register dest, IntEntry *i, ostream& s)
@@ -305,7 +303,6 @@ static void emit_load_int(Register dest, IntEntry *i, ostream& s)
   emit_partial_load_address(dest,s);
   i->code_ref(s);
   s << "  # " << i->get_string() << ENDL;
-  s << ENDL;
 }
 
 static void emit_move(Register dest_reg, Register source_reg, ostream& s) {
@@ -1163,6 +1160,7 @@ void CgenClassTable::code()
 //                   - the class methods
 //                   - etc...
   code_methods();
+  code_dispatch_abort_handlers();
 }
 
 
@@ -1343,6 +1341,14 @@ std::unique_ptr<Annotate> CgenClassTable::annotate(const std::string& message, i
   return std::make_unique<AnnotateImpl>(str, message, line_number, annotation_indent);
 }
 
+int CgenClassTable::get_dispatch_abort_label(StringEntryP file_name, int line_number) {
+  const auto iter = dispatch_abort_labels.insert({{ file_name, line_number }, -1}).first;
+  if (iter->second == -1) {
+    iter->second = create_label();
+  }
+  return iter->second;
+}
+
 void CgenClassTable::code_methods() {
   push_symbol_location(self, { SELF });
   std::vector<Symbol> attr_names;
@@ -1457,6 +1463,16 @@ void CgenClassTable::code_methods() {
   process_class(process_class, root());
 }
 
+void CgenClassTable::code_dispatch_abort_handlers() {
+  for (const auto [entry, label] : dispatch_abort_labels) {
+    const auto [file_name, line_number] = entry;
+    emit_label_def(label, str);
+    emit_load_imm(T1, line_number, str);
+    emit_load_string(ACC, file_name, str);
+    emit_jal("_dispatch_abort", str);
+  }
+}
+
 CodeResult assign_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
   const auto expr_res = expr->code(s, codegen);
@@ -1483,8 +1499,9 @@ CodeResult code_dispatch(
     emit_push(arg_expr_res.REG, s);
   }
   const auto expr_res = expr->code(s, codegen);
-  const auto dispatch_abort_label = codegen.create_label();
-  const auto end_label = codegen.create_label();
+  const auto dispatch_abort_label = codegen.get_dispatch_abort_label(
+    stringtable.lookup_string(codegen.get_filename()), line_number
+  );
   emit_beqz(expr_res.REG, dispatch_abort_label, s);
   emit_move(ACC, expr_res.REG, s);
   if (dynamic) {
@@ -1494,12 +1511,6 @@ CodeResult code_dispatch(
   } else {
     s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
   }
-  emit_branch(end_label, s);
-  emit_label_def(dispatch_abort_label, s);
-  emit_load_imm(T1, line_number, s);
-  emit_load_string(ACC, stringtable.lookup_string(codegen.get_filename()), s);  
-  emit_jal("_dispatch_abort", s);
-  emit_label_def(end_label, s);
   return CodeResult{};
 }
 
