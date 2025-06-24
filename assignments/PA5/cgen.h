@@ -66,7 +66,7 @@ private:
    }
 
    int create_label() override;
-   SymbolLocation allocate_temporary() override;
+   SymbolLocation allocate_temporary(Register value_reg) override;
    void free_temporary() override;
    SymbolLocation get_symbol_location(Symbol name) override;
    void push_symbol_location(Symbol name, SymbolLocation loc) override;

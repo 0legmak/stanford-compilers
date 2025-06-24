@@ -58,11 +58,15 @@ struct Annotate {
   virtual ~Annotate() {};
 };
 
+struct CodeResult {
+  Register REG = Register::ACC;
+};
+
 class CodeGenerator {
 public:
   virtual ~CodeGenerator() {};
   virtual int create_label() = 0;
-  virtual SymbolLocation allocate_temporary() = 0;
+  virtual SymbolLocation allocate_temporary(Register value_reg) = 0;
   virtual void free_temporary() = 0;
   virtual SymbolLocation get_symbol_location(Symbol name) = 0;
   virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;
