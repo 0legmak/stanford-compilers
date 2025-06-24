@@ -30,6 +30,7 @@
 
 extern void emit_string_constant(ostream& str, char *s);
 extern int cgen_debug;
+extern int cgen_optimize;
 
 //
 // Three symbols from the semantic analyzer (semant.cc) are used.
@@ -474,19 +475,35 @@ static void emit_gc_check(Register source, ostream &s)
 constexpr int kIntValAttr = 0;
 
 void emit_fetch_attr(const SymbolLocation src, int attr_idx, Register dst, ostream &s) {
-  emit_load(dst, src.offset, src.reg, s);
-  emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, dst, s);
+  if (src.offset) {
+    emit_load(dst, *src.offset, src.reg, s);
+    emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, dst, s);
+  } else {
+    emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, src.reg, s);
+  }
+}
+
+void emit_copy_to_reg(const SymbolLocation src, Register dst, ostream &s) {
+  if (src.offset) {
+    emit_load(dst, *src.offset, src.reg, s);
+  } else {
+    emit_move(dst, src.reg, s);
+  }
 }
 
 static bool is_attr_location(const SymbolLocation loc) {
-  return loc.reg == SELF;
+  return loc.offset && loc.reg == SELF;
 }
 
 void emit_assign(const SymbolLocation dst, ostream& s) {
-  emit_store(ACC, dst.offset, dst.reg, s);
-  if (cgen_Memmgr != GC_NOGC && is_attr_location(dst)) {
-    emit_addiu(A1, SELF, dst.offset * WORD_SIZE, s);
-    emit_gc_assign(s);
+  if (dst.offset) {
+    emit_store(ACC, *dst.offset, dst.reg, s);
+    if (cgen_Memmgr != GC_NOGC && is_attr_location(dst)) {
+      emit_addiu(A1, dst.reg, *dst.offset * WORD_SIZE, s);
+      emit_gc_assign(s);
+    }
+  } else {
+    emit_move(dst.reg, ACC, s);
   }
 }
 
@@ -909,6 +926,7 @@ CgenClassTable::CgenClassTable(Classes classes, ostream& s) : nds(NULL) , str(s)
    install_classes(classes);
    build_inheritance_tree();
    assign_class_tags();
+   prepare_registers_for_temporaries();
 
    code();
    exitscope();
@@ -1107,6 +1125,12 @@ void CgenClassTable::assign_class_tags() {
   boolclasstag = probe(Bool)->get_class_tag();
 }
 
+void CgenClassTable::prepare_registers_for_temporaries() {
+  if (!cgen_optimize) {
+    return;
+  }
+  registers_for_temporaries = { S1, S2, S3, S4, S5, S6 };
+}
 
 void CgenClassTable::code()
 {
@@ -1176,15 +1200,26 @@ int CgenClassTable::create_label() {
 }
 
 static std::ostream& operator<<(std::ostream& os, const SymbolLocation& loc) {
-  os << loc.offset << "(" << rn(loc.reg) << ")";
+  if (loc.offset) {
+    os << *loc.offset << "(" << rn(loc.reg) << ")";
+  } else {
+    os << rn(loc.reg);
+  }
   return os;
 }
 
 SymbolLocation CgenClassTable::allocate_temporary() {
-  const SymbolLocation loc = { FP, curr_fp_offset };
+  SymbolLocation loc;
+  if (registers_used_cnt < registers_for_temporaries.size()) {
+    loc = { registers_for_temporaries[registers_used_cnt] };
+    ++registers_used_cnt;
+    emit_move(loc.reg, ACC, str);
+  } else {
+    loc = { FP, curr_fp_offset };
+    --curr_fp_offset;
+    emit_push(ACC, str);
+  }
   temporaries_stack.push(loc);
-  emit_push(ACC, str);
-  --curr_fp_offset;
   if (cgen_debug) {
     std::cerr << "Allocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
@@ -1194,12 +1229,21 @@ SymbolLocation CgenClassTable::allocate_temporary() {
 void CgenClassTable::free_temporary() {
   const SymbolLocation loc = temporaries_stack.top();
   temporaries_stack.pop();
-  if (loc.reg != FP || loc.offset != curr_fp_offset + 1) {
-    throw std::logic_error((std::ostringstream() << "Bad attempt to free temporary at "
-      << loc << ", current FP offset: " << curr_fp_offset).str());
+  if (loc.offset) {
+    if (loc.reg != FP || loc.offset != curr_fp_offset + 1) {
+      throw std::logic_error((std::ostringstream() << "Bad attempt to free temporary at "
+        << loc << ", current FP offset: " << curr_fp_offset).str());
+    }
+    ++curr_fp_offset;
+    emit_addiu(SP, SP, WORD_SIZE, str);
+  } else {
+    if (registers_used_cnt == 0 || loc.reg != registers_for_temporaries[registers_used_cnt - 1]) {
+      throw std::logic_error((std::ostringstream() << "Bad attempt to free temporary at "
+        << loc << ", current used register count : " << registers_used_cnt).str());
+    }
+    --registers_used_cnt;
+    emit_move(loc.reg, ZERO, str);
   }
-  emit_addiu(SP, SP, WORD_SIZE, str);
-  ++curr_fp_offset;
   if (cgen_debug) {
     std::cerr << "Deallocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
@@ -1215,7 +1259,7 @@ void CgenClassTable::adjust_fp_offset(int word_cnt) {
 SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
   const auto loc = symbol_environment.at(name).top();
   if (cgen_debug) {
-    std::cerr << "Found symbol " << name << " at location " << loc.offset << "(" << rn(loc.reg) << ")" << std::endl;
+    std::cerr << "Found symbol " << name << " at " << loc << std::endl;
   }
   return loc;
 }
@@ -1225,15 +1269,14 @@ void CgenClassTable::push_symbol_location(Symbol name, SymbolLocation loc) {
   auto& locs = symbol_environment[name];
   locs.push(loc);
   if (cgen_debug) {
-    std::cerr << "Created symbol " << name << " at location " << loc.offset << "(" << rn(loc.reg) << ")" << std::endl;
+    std::cerr << "Created symbol " << name << " at " << loc << std::endl;
   }
 }
 
 void CgenClassTable::pop_symbol_location() {
   auto& locs = symbol_environment.at(stack_symbols.top());
   if (cgen_debug) {
-    std::cerr << "Deleted symbol " << stack_symbols.top() << " at location "
-      << locs.top().offset << "(" << rn(locs.top().reg) << ")" << std::endl;
+    std::cerr << "Deleted symbol " << stack_symbols.top() << " at " << locs.top() << std::endl;
   }
   locs.pop();
   stack_symbols.pop();
@@ -1305,6 +1348,7 @@ std::unique_ptr<Annotate> CgenClassTable::annotate(const std::string& message, i
 }
 
 void CgenClassTable::code_methods() {
+  push_symbol_location(self, { SELF });
   std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
   auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
@@ -1513,7 +1557,7 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   }
 
   emit_label_def(case_abort_label, s);
-  emit_load(ACC, case_var_loc.offset, case_var_loc.reg, s);
+  emit_copy_to_reg(case_var_loc, ACC, s);
   emit_jal("_case_abort", s);
 
   emit_label_def(case_abort2_label, s);
@@ -1621,7 +1665,7 @@ void eq_class::code(ostream &s, CodeGenerator& codegen) {
   const auto e1_loc = codegen.allocate_temporary();
   e2->code(s, codegen);
   emit_move(T2, ACC, s);
-  emit_load(T1, e1_loc.offset, e1_loc.reg, s);
+  emit_copy_to_reg(e1_loc, T1, s);
   codegen.free_temporary();
   const auto eq_label = codegen.create_label();
   emit_load_bool(ACC, truebool, s);
@@ -1700,7 +1744,7 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     const auto init_loc = codegen.allocate_temporary();
     emit_load(ACC, 0, T1, s);
     emit_jal(OBJECT_COPY, s);
-    emit_load(T1, init_loc.offset, init_loc.reg, s);
+    emit_copy_to_reg(init_loc, T1, s);
     codegen.free_temporary();
     emit_jalr(T1, s);
   } else {
@@ -1726,12 +1770,5 @@ void no_expr_class::code(ostream &s, CodeGenerator& codegen) {
 
 void object_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate(std::string("object '") + name->get_string() + "'", line_number);
-  if (name == self) {
-    emit_move(ACC, SELF, s);
-  } else {
-    const auto [reg, offset] = codegen.get_symbol_location(name);
-    emit_load(ACC, offset, reg, s);
-  }
+  emit_copy_to_reg(codegen.get_symbol_location(name), ACC, s);
 }
-
-

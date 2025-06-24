@@ -36,6 +36,8 @@ private:
    CgenNode* current_class_node = nullptr;
    int annotation_indent = 0;
    std::stack<SymbolLocation> temporaries_stack;
+   std::vector<Register> registers_for_temporaries;
+   size_t registers_used_cnt = 0;
 
    int create_label() override;
    SymbolLocation allocate_temporary() override;
@@ -73,6 +75,7 @@ private:
    void build_inheritance_tree();
    void set_relations(CgenNodeP nd);
    void assign_class_tags();
+   void prepare_registers_for_temporaries();
 public:
    CgenClassTable(Classes, ostream& str);
    void code();

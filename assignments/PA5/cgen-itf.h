@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <optional>
 #include <vector>
 
 class Entry;
@@ -44,7 +45,7 @@ enum class Register : int {
 
 struct SymbolLocation {
   Register reg;
-  int offset;
+  std::optional<int> offset;
 };
 
 struct FindMethodResult {
