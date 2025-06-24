@@ -1217,9 +1217,10 @@ SymbolLocation CgenClassTable::allocate_temporary() {
   } else {
     loc = { FP, curr_fp_offset };
     --curr_fp_offset;
-    emit_push(ACC, str);
+    emit_store(ACC, *loc.offset, loc.reg, str);
   }
   temporaries_stack.push(loc);
+  temporaries_used = std::max(temporaries_used, temporaries_stack.size());
   if (cgen_debug) {
     std::cerr << "Allocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
@@ -1235,24 +1236,15 @@ void CgenClassTable::free_temporary() {
         << loc << ", current FP offset: " << curr_fp_offset).str());
     }
     ++curr_fp_offset;
-    emit_addiu(SP, SP, WORD_SIZE, str);
   } else {
     if (registers_used_cnt == 0 || loc.reg != registers_for_temporaries[registers_used_cnt - 1]) {
       throw std::logic_error((std::ostringstream() << "Bad attempt to free temporary at "
         << loc << ", current used register count : " << registers_used_cnt).str());
     }
     --registers_used_cnt;
-    emit_move(loc.reg, ZERO, str);
   }
   if (cgen_debug) {
     std::cerr << "Deallocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
-  }
-}
-
-void CgenClassTable::adjust_fp_offset(int word_cnt) {
-  curr_fp_offset += word_cnt;
-  if (cgen_debug) {
-    std::cerr << "Stack pointer ajusted by " << word_cnt << " words, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
@@ -1368,36 +1360,58 @@ void CgenClassTable::code_methods() {
       push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
     }
 
-    auto emit_prologue = [&]() {
-      emit_store(FP, 0, SP, str);
+    auto emit_method = [&](int arg_cnt, auto&& emit_header, auto&& emit_body) {
+      reset_stats();
+      str.set_enabled(false);
+      emit_body();
+      str.set_enabled(true);
+      emit_header();
+      curr_fp_offset = 0;
+      emit_store(FP, curr_fp_offset--, SP, str);
       emit_move(FP, SP, str);
-      emit_store(RA, -1, FP, str);
-      emit_store(SELF, -2, FP, str);
-      emit_addiu(SP, SP, -3 * WORD_SIZE, str);
-      emit_move(SELF, ACC, str);
-      curr_fp_offset = -3;
-    };
-    auto emit_epilogue = [&](int arg_cnt) {
-      if (curr_fp_offset != -3) {
-        throw std::runtime_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
+      emit_store(RA, curr_fp_offset--, FP, str);
+      emit_store(SELF, curr_fp_offset--, FP, str);
+      const auto saved_register_cnt = std::min(temporaries_used, registers_for_temporaries.size());
+      for (size_t i = 0; i < saved_register_cnt; ++i) {
+        emit_store(registers_for_temporaries[i], curr_fp_offset--, FP, str);
       }
-      emit_addiu(SP, SP, (3 + arg_cnt) * WORD_SIZE, str);
-      emit_load(SELF, -2, FP, str);
-      emit_load(RA, -1, FP, str);
-      emit_load(FP, 0, FP, str);
+      const auto temp_on_stack_count = temporaries_used - saved_register_cnt;
+      if (cgen_Memmgr != GC_NOGC) {
+        for (size_t i = 0; i < temp_on_stack_count; ++i) {
+          emit_store(ZERO, curr_fp_offset - i, FP, str);
+        }
+      }
+      emit_addiu(SP, SP, (curr_fp_offset + -temp_on_stack_count) * WORD_SIZE, str);
+      emit_move(SELF, ACC, str);
+      emit_body();
+      emit_addiu(SP, SP, (-curr_fp_offset + temp_on_stack_count + arg_cnt) * WORD_SIZE, str);
+      for (size_t i = 0; i < saved_register_cnt; ++i) {
+        emit_load(registers_for_temporaries[saved_register_cnt - 1 - i], ++curr_fp_offset, FP, str);
+      }
+      emit_load(SELF, ++curr_fp_offset, FP, str);
+      emit_load(RA, ++curr_fp_offset, FP, str);
+      emit_load(FP, ++curr_fp_offset, FP, str);
+      if (curr_fp_offset != 0) {
+        throw std::logic_error("Wrong FP offset: " + std::to_string(curr_fp_offset));
+      }
       emit_return(str);
     };
 
-    emit_init_ref(class_name, str); str << LABEL;
-    emit_prologue();
-    for (int i = 0; i < attr_count; ++i) {
-      if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
-        attr_exprs[i]->code(str, *this);
-        emit_assign({ SELF, DEFAULT_OBJFIELDS + i }, str);
+    emit_method(
+      0,
+      [&]() {
+        emit_init_ref(class_name, str); str << LABEL;
+      },
+      [&]() {
+        for (int i = 0; i < attr_count; ++i) {
+          if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
+            attr_exprs[i]->code(str, *this);
+            emit_assign({ SELF, DEFAULT_OBJFIELDS + i }, str);
+          }
+        }
+        emit_move(ACC, SELF, str);
       }
-    }
-    emit_move(ACC, SELF, str);
-    emit_epilogue(0);
+    );
 
     if (!node->basic()) {
       for (int i = features->first(); features->more(i); i = features->next(i)) {
@@ -1410,12 +1424,15 @@ void CgenClassTable::code_methods() {
         for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
           push_symbol_location(formals->nth(j)->get_name(), { FP, arg_cnt - j });
         }
-
-        emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
-        emit_prologue();
-        feature->get_expr()->code(str, *this);
-        emit_epilogue(arg_cnt);
-
+        emit_method(
+          arg_cnt,
+          [&]() {
+            emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
+          },
+          [&]() {
+            feature->get_expr()->code(str, *this);
+          }
+        );
         for (int j = 0; j < arg_cnt; ++j) {
           pop_symbol_location();
         }
@@ -1458,7 +1475,6 @@ void code_dispatch(
     const auto expr = args->nth(i);
     expr->code(s, codegen);
     emit_push(ACC, s);
-    codegen.adjust_fp_offset(-1);
   }
   expr->code(s, codegen);
   const auto dispatch_abort_label = codegen.create_label();
@@ -1471,7 +1487,6 @@ void code_dispatch(
   } else {
     s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
   }
-  codegen.adjust_fp_offset(arg_cnt);
   emit_branch(end_label, s);
   emit_label_def(dispatch_abort_label, s);
   emit_load_imm(T1, line_number, s);

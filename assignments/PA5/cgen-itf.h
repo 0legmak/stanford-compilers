@@ -64,7 +64,6 @@ public:
   virtual int create_label() = 0;
   virtual SymbolLocation allocate_temporary() = 0;
   virtual void free_temporary() = 0;
-  virtual void adjust_fp_offset(int word_cnt) = 0;
   virtual SymbolLocation get_symbol_location(Symbol name) = 0;
   virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;
   virtual void pop_symbol_location() = 0;

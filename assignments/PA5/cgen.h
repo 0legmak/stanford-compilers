@@ -16,10 +16,30 @@ typedef CgenClassTable *CgenClassTableP;
 class CgenNode;
 typedef CgenNode *CgenNodeP;
 
+class DiscardOrForwardStream : public std::ostream {
+public:
+   DiscardOrForwardStream(std::ostream& target)
+      : std::ostream(target.rdbuf()), real_stream(target)
+   {}
+   void set_enabled(bool enable) {
+      enabled = enable;
+      rdbuf(enabled ? real_stream.rdbuf() : &nb);
+   }
+private:
+   class NullBuf : public std::streambuf {
+   protected:
+      int overflow(int c) override { return traits_type::not_eof(c); }
+   };
+
+   std::ostream& real_stream;
+   NullBuf nb;
+   bool enabled = true;
+};
+
 class CgenClassTable : public SymbolTable<Symbol,CgenNode>, public CodeGenerator {
 private:
    List<CgenNode> *nds;
-   ostream& str;
+   DiscardOrForwardStream str;
    int stringclasstag = -1;
    int intclasstag = -1;
    int boolclasstag = -1;
@@ -39,10 +59,15 @@ private:
    std::vector<Register> registers_for_temporaries;
    size_t registers_used_cnt = 0;
 
+   // stats from phase 1
+   size_t temporaries_used = 0;
+   void reset_stats() {
+      temporaries_used = 0;
+   }
+
    int create_label() override;
    SymbolLocation allocate_temporary() override;
    void free_temporary() override;
-   void adjust_fp_offset(int word_cnt) override;
    SymbolLocation get_symbol_location(Symbol name) override;
    void push_symbol_location(Symbol name, SymbolLocation loc) override;
    void pop_symbol_location() override;
