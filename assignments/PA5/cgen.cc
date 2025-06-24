@@ -432,12 +432,6 @@ static void emit_push(Register reg, ostream& str)
   emit_addiu(SP,SP,-4,str);
 }
 
-static void emit_pop(Register reg, ostream& str)
-{
-  emit_addiu(SP, SP, WORD_SIZE, str);
-  emit_load(reg, 0, SP, str);
-}
-
 //
 // Fetch the integer value in an Int object.
 // Emits code to fetch the integer value of the Integer object pointed
@@ -477,6 +471,12 @@ static void emit_gc_check(Register source, ostream &s)
   s << JAL << "_gc_check" << ENDL;
 }
 
+constexpr int kIntValAttr = 0;
+
+void emit_fetch_attr(const SymbolLocation src, int attr_idx, Register dst, ostream &s) {
+  emit_load(dst, src.offset, src.reg, s);
+  emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, dst, s);
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -1163,19 +1163,33 @@ int CgenClassTable::create_label() {
   return label_id++;
 }
 
-void CgenClassTable::push(Register reg) {
-  emit_push(reg, str);
-  --curr_fp_offset;
-  if (cgen_debug) {
-    std::cerr << "Pushing " << rn(reg) << " to stack, current FP offset: " << curr_fp_offset << std::endl;
-  }
+static std::ostream& operator<<(std::ostream& os, const SymbolLocation& loc) {
+  os << loc.offset << "(" << rn(loc.reg) << ")";
+  return os;
 }
 
-void CgenClassTable::pop(Register reg) {
-  emit_pop(reg, str);
+SymbolLocation CgenClassTable::allocate_temporary() {
+  const SymbolLocation loc = { FP, curr_fp_offset };
+  temporaries_stack.push(loc);
+  emit_push(ACC, str);
+  --curr_fp_offset;
+  if (cgen_debug) {
+    std::cerr << "Allocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
+  }
+  return loc;
+}
+
+void CgenClassTable::free_temporary() {
+  const SymbolLocation loc = temporaries_stack.top();
+  temporaries_stack.pop();
+  if (loc.reg != FP || loc.offset != curr_fp_offset + 1) {
+    throw std::logic_error((std::ostringstream() << "Bad attempt to free temporary at "
+      << loc << ", current FP offset: " << curr_fp_offset).str());
+  }
+  emit_addiu(SP, SP, WORD_SIZE, str);
   ++curr_fp_offset;
   if (cgen_debug) {
-    std::cerr << "Popping " << rn(reg) << " from stack, current FP offset: " << curr_fp_offset << std::endl;
+    std::cerr << "Deallocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
@@ -1188,29 +1202,10 @@ void CgenClassTable::assign(SymbolLocation loc, Expression expr) {
   }
 }
 
-int CgenClassTable::allocate_stack_space(int word_cnt) {
-  if (word_cnt == 0) {
-    return curr_fp_offset;
-  }
-  const auto prev_fp_offset = curr_fp_offset;
-  emit_addiu(SP, SP, -word_cnt * WORD_SIZE, str);
-  curr_fp_offset -= word_cnt;
-  if (cgen_debug) {
-    std::cerr << "Allocated " << word_cnt << " words on stack, current FP offset: " << curr_fp_offset << std::endl;
-  }
-  return prev_fp_offset;
-}
-
-void CgenClassTable::free_stack_space(int word_cnt, bool emit_code) {
-  if (word_cnt == 0) {
-    return;
-  }
-  if (emit_code) {
-    emit_addiu(SP, SP, word_cnt * WORD_SIZE, str);
-  }
+void CgenClassTable::adjust_fp_offset(int word_cnt) {
   curr_fp_offset += word_cnt;
   if (cgen_debug) {
-    std::cerr << "Freed " << word_cnt << " words on stack, current FP offset: " << curr_fp_offset << std::endl;
+    std::cerr << "Stack pointer ajusted by " << word_cnt << " words, current FP offset: " << curr_fp_offset << std::endl;
   }
 }
 
@@ -1413,7 +1408,8 @@ void code_dispatch(
   for (int i = args->first(); args->more(i); i = args->next(i)) {
     const auto expr = args->nth(i);
     expr->code(s, codegen);
-    codegen.push(ACC);
+    emit_push(ACC, s);
+    codegen.adjust_fp_offset(-1);
   }
   expr->code(s, codegen);
   const auto dispatch_abort_label = codegen.create_label();
@@ -1426,7 +1422,7 @@ void code_dispatch(
   } else {
     s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
   }
-  codegen.free_stack_space(arg_cnt, false);
+  codegen.adjust_fp_offset(arg_cnt);
   emit_branch(end_label, s);
   emit_label_def(dispatch_abort_label, s);
   emit_load_imm(T1, line_number, s);
@@ -1495,8 +1491,7 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   expr->code(s, codegen);
   emit_beqz(ACC, case_abort2_label, s);
-  const auto case_var_stack_offset = codegen.allocate_stack_space(1);
-  emit_store(ACC, case_var_stack_offset, FP, s);
+  const auto case_var_loc = codegen.allocate_temporary();
   emit_load(ACC, TAG_OFFSET, ACC, s);
   emit_sll(ACC, ACC, 2, s);
   emit_partial_load_address(T1, s); emit_label_ref(jump_table_label, s); s << ENDL;
@@ -1506,14 +1501,14 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   for (int i = 0; i < cases_count; ++i) {
     emit_label_def(case_labels[i], s);
-    codegen.push_symbol_location(case_vars[i], { FP, case_var_stack_offset });
+    codegen.push_symbol_location(case_vars[i], case_var_loc);
     case_expr[i]->code(s, codegen);
     codegen.pop_symbol_location();
     emit_branch(case_end_label, s);
   }
 
   emit_label_def(case_abort_label, s);
-  emit_load(ACC, case_var_stack_offset, FP, s);
+  emit_load(ACC, case_var_loc.offset, case_var_loc.reg, s);
   emit_jal("_case_abort", s);
 
   emit_label_def(case_abort2_label, s);
@@ -1530,7 +1525,7 @@ void typcase_class::code(ostream &s, CodeGenerator& codegen) {
   }
 
   emit_label_def(case_end_label, s);
-  codegen.free_stack_space(1, true);
+  codegen.free_temporary();
 }
 
 void block_class::code(ostream &s, CodeGenerator& codegen) {
@@ -1556,12 +1551,11 @@ void let_class::code(ostream &s, CodeGenerator& codegen) {
       emit_load_imm(ACC, 0, s);
     }
   }
-  const auto init_var_stack_offset = codegen.allocate_stack_space(1);
-  emit_store(ACC, init_var_stack_offset, FP, s);
-  codegen.push_symbol_location(identifier, { FP, init_var_stack_offset });
+  const auto init_var_loc = codegen.allocate_temporary();
+  codegen.push_symbol_location(identifier, init_var_loc);
   body->code(s, codegen);
   codegen.pop_symbol_location();
-  codegen.free_stack_space(1, true);
+  codegen.free_temporary();
 }
 
 void create_object(Symbol type, ostream &s) {
@@ -1573,14 +1567,14 @@ void create_object(Symbol type, ostream &s) {
 template <auto emit_arith_op>
 void code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
-  codegen.push(ACC);
+  const auto e1_loc = codegen.allocate_temporary();
   e2->code(s, codegen);
-  codegen.push(ACC);
+  const auto e2_loc = codegen.allocate_temporary();
   create_object(Int, s);
-  codegen.pop(T2);
-  emit_fetch_int(T2, T2, s);
-  codegen.pop(T1);
-  emit_fetch_int(T1, T1, s);
+  emit_fetch_attr(e2_loc, kIntValAttr, T2, s);
+  codegen.free_temporary();
+  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
+  codegen.free_temporary();
   emit_arith_op(T1, T1, T2, s);
   emit_store_int(T1, ACC, s);
 }
@@ -1608,10 +1602,10 @@ void divide_class::code(ostream &s, CodeGenerator& codegen) {
 void neg_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("neg", line_number);
   e1->code(s, codegen);
-  codegen.push(ACC);
+  const auto e1_loc = codegen.allocate_temporary();
   create_object(Int, s);
-  codegen.pop(T1);
-  emit_fetch_int(T1, T1, s);
+  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
+  codegen.free_temporary();
   emit_neg(T1, T1, s);
   emit_store_int(T1, ACC, s);
 }
@@ -1619,10 +1613,11 @@ void neg_class::code(ostream &s, CodeGenerator& codegen) {
 void eq_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("eq", line_number);
   e1->code(s, codegen);
-  codegen.push(ACC);
+  const auto e1_loc = codegen.allocate_temporary();
   e2->code(s, codegen);
   emit_move(T2, ACC, s);
-  codegen.pop(T1);
+  emit_load(T1, e1_loc.offset, e1_loc.reg, s);
+  codegen.free_temporary();
   const auto eq_label = codegen.create_label();
   emit_load_bool(ACC, truebool, s);
   emit_beq(T1, T2, eq_label, s);
@@ -1634,11 +1629,11 @@ void eq_class::code(ostream &s, CodeGenerator& codegen) {
 template<auto emit_cmp_branch>
 void code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   e1->code(s, codegen);
-  codegen.push(ACC);
+  const auto e1_loc = codegen.allocate_temporary();
   e2->code(s, codegen);
   emit_fetch_int(ACC, ACC, s);
-  codegen.pop(T1);
-  emit_fetch_int(T1, T1, s);
+  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
+  codegen.free_temporary();
   const auto label_if_true = codegen.create_label();
   const auto label_end = codegen.create_label();
   emit_cmp_branch(T1, ACC, label_if_true, s);
@@ -1697,10 +1692,11 @@ void new__class::code(ostream &s, CodeGenerator& codegen) {
     emit_sll(T2, T2, 3, s);
     emit_addu(T1, T1, T2, s);
     emit_load(ACC, 1, T1, s);
-    codegen.push(ACC);
+    const auto init_loc = codegen.allocate_temporary();
     emit_load(ACC, 0, T1, s);
     emit_jal(OBJECT_COPY, s);
-    codegen.pop(T1);
+    emit_load(T1, init_loc.offset, init_loc.reg, s);
+    codegen.free_temporary();
     emit_jalr(T1, s);
   } else {
     create_object(type_name, s);

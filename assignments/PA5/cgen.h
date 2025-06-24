@@ -35,13 +35,13 @@ private:
    int label_id = 0;
    CgenNode* current_class_node = nullptr;
    int annotation_indent = 0;
+   std::stack<SymbolLocation> temporaries_stack;
 
    int create_label() override;
-   void push(Register reg) override;
-   void pop(Register reg) override;
+   SymbolLocation allocate_temporary() override;
+   void free_temporary() override;
    void assign(SymbolLocation loc, Expression expr) override;
-   int allocate_stack_space(int word_cnt) override;
-   void free_stack_space(int word_cnt, bool emit_code) override;
+   void adjust_fp_offset(int word_cnt) override;
    SymbolLocation get_symbol_location(Symbol name) override;
    void push_symbol_location(Symbol name, SymbolLocation loc) override;
    void pop_symbol_location() override;
