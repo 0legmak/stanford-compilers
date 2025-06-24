@@ -478,6 +478,18 @@ void emit_fetch_attr(const SymbolLocation src, int attr_idx, Register dst, ostre
   emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, dst, s);
 }
 
+static bool is_attr_location(const SymbolLocation loc) {
+  return loc.reg == SELF;
+}
+
+void emit_assign(const SymbolLocation dst, ostream& s) {
+  emit_store(ACC, dst.offset, dst.reg, s);
+  if (cgen_Memmgr != GC_NOGC && is_attr_location(dst)) {
+    emit_addiu(A1, SELF, dst.offset * WORD_SIZE, s);
+    emit_gc_assign(s);
+  }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 //
 // coding strings, ints, and booleans
@@ -1193,15 +1205,6 @@ void CgenClassTable::free_temporary() {
   }
 }
 
-void CgenClassTable::assign(SymbolLocation loc, Expression expr) {
-  expr->code(str, *this);
-  emit_store(ACC, loc.offset, loc.reg, str);
-  if (cgen_Memmgr != GC_NOGC && loc.reg == SELF) {
-    emit_addiu(A1, SELF, loc.offset * WORD_SIZE, str);
-    emit_gc_assign(str);
-  }
-}
-
 void CgenClassTable::adjust_fp_offset(int word_cnt) {
   curr_fp_offset += word_cnt;
   if (cgen_debug) {
@@ -1345,7 +1348,8 @@ void CgenClassTable::code_methods() {
     emit_prologue();
     for (int i = 0; i < attr_count; ++i) {
       if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
-        assign({ SELF, DEFAULT_OBJFIELDS + i }, attr_exprs[i]);
+        attr_exprs[i]->code(str, *this);
+        emit_assign({ SELF, DEFAULT_OBJFIELDS + i }, str);
       }
     }
     emit_move(ACC, SELF, str);
@@ -1389,7 +1393,8 @@ void CgenClassTable::code_methods() {
 
 void assign_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
-  codegen.assign(codegen.get_symbol_location(name), expr);
+  expr->code(s, codegen);
+  emit_assign(codegen.get_symbol_location(name), s);
 }
 
 void code_dispatch(

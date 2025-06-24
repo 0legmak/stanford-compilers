@@ -2,8 +2,6 @@
 #include <memory>
 #include <vector>
 
-class Expression_class;
-typedef Expression_class *Expression;
 class Entry;
 typedef Entry* Symbol;
 
@@ -65,7 +63,6 @@ public:
   virtual int create_label() = 0;
   virtual SymbolLocation allocate_temporary() = 0;
   virtual void free_temporary() = 0;
-  virtual void assign(SymbolLocation loc, Expression expr) = 0;
   virtual void adjust_fp_offset(int word_cnt) = 0;
   virtual SymbolLocation get_symbol_location(Symbol name) = 0;
   virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;

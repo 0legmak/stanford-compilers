@@ -40,7 +40,6 @@ private:
    int create_label() override;
    SymbolLocation allocate_temporary() override;
    void free_temporary() override;
-   void assign(SymbolLocation loc, Expression expr) override;
    void adjust_fp_offset(int word_cnt) override;
    SymbolLocation get_symbol_location(Symbol name) override;
    void push_symbol_location(Symbol name, SymbolLocation loc) override;
