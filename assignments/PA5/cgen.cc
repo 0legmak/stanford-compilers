@@ -1741,16 +1741,13 @@ CodeResult code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerat
   const auto e1_res = e1->code(s, codegen);
   const auto e1_loc = codegen.new_temporary(e1_res.REG);
   const auto e2_res = e2->code(s, codegen);
-  emit_fetch_int(ACC, e2_res.REG, s);
+  emit_fetch_int(T2, e2_res.REG, s);
   emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
   const auto label_if_true = codegen.create_label();
-  const auto label_end = codegen.create_label();
-  emit_cmp_branch(T1, ACC, label_if_true, s);
-  emit_load_bool(ACC, falsebool, s);
-  emit_branch(label_end, s);
-  emit_label_def(label_if_true, s);
   emit_load_bool(ACC, truebool, s);
-  emit_label_def(label_end, s);
+  emit_cmp_branch(T1, T2, label_if_true, s);
+  emit_load_bool(ACC, falsebool, s);
+  emit_label_def(label_if_true, s);
   return CodeResult{};
 }
 
@@ -1766,17 +1763,13 @@ CodeResult leq_class::code(ostream &s, CodeGenerator& codegen) {
 
 CodeResult comp_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("not", line_number);
-  const auto e1_res = e1->code(s, codegen);
-  emit_fetch_bool(ACC, e1_res.REG, s);
-  emit_slti(ACC, ACC, 1, s);
   const auto label_if_zero = codegen.create_label();
-  const auto label_end = codegen.create_label();
-  emit_beqz(ACC, label_if_zero, s);
+  const auto e1_res = e1->code(s, codegen);
+  emit_fetch_bool(T1, e1_res.REG, s);
   emit_load_bool(ACC, truebool, s);
-  emit_branch(label_end, s);
-  emit_label_def(label_if_zero, s);
+  emit_beqz(T1, label_if_zero, s);
   emit_load_bool(ACC, falsebool, s);
-  emit_label_def(label_end, s);
+  emit_label_def(label_if_zero, s);
   return CodeResult{};
 }
 
@@ -1823,15 +1816,13 @@ CodeResult new__class::code(ostream &s, CodeGenerator& codegen) {
 
 CodeResult isvoid_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("isvoid", line_number);
-  const auto e1_res = e1->code(s, codegen);
   const auto label_if_zero = codegen.create_label();
-  const auto label_end = codegen.create_label();
-  emit_beqz(e1_res.REG, label_if_zero, s);
-  emit_load_bool(ACC, falsebool, s);
-  emit_branch(label_end, s);
-  emit_label_def(label_if_zero, s);
+  const auto e1_res = e1->code(s, codegen);
+  emit_move(T1, e1_res.REG, s);
   emit_load_bool(ACC, truebool, s);
-  emit_label_def(label_end, s);
+  emit_beqz(T1, label_if_zero, s);
+  emit_load_bool(ACC, falsebool, s);
+  emit_label_def(label_if_zero, s);
   return CodeResult{};
 }
 
