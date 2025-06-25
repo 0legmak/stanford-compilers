@@ -1210,7 +1210,21 @@ static std::ostream& operator<<(std::ostream& os, const SymbolLocation& loc) {
   return os;
 }
 
-SymbolLocation CgenClassTable::allocate_temporary(Register value_reg) {
+class TemporaryImpl : public Temporary {
+public:
+  TemporaryImpl(CgenClassTable& tbl, SymbolLocation loc) : tbl(tbl), loc(loc) {}
+  ~TemporaryImpl() override {
+    tbl.delete_temporary();
+  }
+  SymbolLocation get() override {
+    return loc;
+  }
+private:
+  CgenClassTable& tbl;
+  SymbolLocation loc;
+};
+
+std::unique_ptr<Temporary> CgenClassTable::new_temporary(Register value_reg) {
   SymbolLocation loc;
   if (registers_used_cnt < registers_for_temporaries.size()) {
     loc = { registers_for_temporaries[registers_used_cnt] };
@@ -1226,10 +1240,10 @@ SymbolLocation CgenClassTable::allocate_temporary(Register value_reg) {
   if (cgen_debug) {
     std::cerr << "Allocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
-  return loc;
+  return std::make_unique<TemporaryImpl>(*this, loc);
 }
 
-void CgenClassTable::free_temporary() {
+void CgenClassTable::delete_temporary() {
   const SymbolLocation loc = temporaries_stack.top();
   temporaries_stack.pop();
   if (loc.offset) {
@@ -1258,16 +1272,27 @@ SymbolLocation CgenClassTable::get_symbol_location(Symbol name) {
   return loc;
 }
 
-void CgenClassTable::push_symbol_location(Symbol name, SymbolLocation loc) {
+class ScopedSymbolImpl : public ScopedSymbol {
+public:
+  ScopedSymbolImpl(CgenClassTable& tbl) : tbl(tbl) {}
+  ~ScopedSymbolImpl() override {
+    tbl.delete_scoped_symbol();
+  }
+private:
+  CgenClassTable& tbl;
+};
+
+std::unique_ptr<ScopedSymbol> CgenClassTable::new_scoped_symbol(Symbol name, SymbolLocation loc) {
   stack_symbols.push(name);
   auto& locs = symbol_environment[name];
   locs.push(loc);
   if (cgen_debug) {
     std::cerr << "Created symbol " << name << " at " << loc << std::endl;
   }
+  return std::make_unique<ScopedSymbolImpl>(*this);
 }
 
-void CgenClassTable::pop_symbol_location() {
+void CgenClassTable::delete_scoped_symbol() {
   auto& locs = symbol_environment.at(stack_symbols.top());
   if (cgen_debug) {
     std::cerr << "Deleted symbol " << stack_symbols.top() << " at " << locs.top() << std::endl;
@@ -1350,7 +1375,7 @@ int CgenClassTable::get_dispatch_abort_label(StringEntryP file_name, int line_nu
 }
 
 void CgenClassTable::code_methods() {
-  push_symbol_location(self, { SELF });
+  const auto scoped_self = new_scoped_symbol(self, { SELF });
   std::vector<Symbol> attr_names;
   std::vector<Expression> attr_exprs;
   auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
@@ -1366,8 +1391,9 @@ void CgenClassTable::code_methods() {
       }
     }
     const int attr_count = attr_names.size();
-    for (int i = 0; i < attr_count; ++i) {
-      push_symbol_location(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
+    std::vector<std::unique_ptr<ScopedSymbol>> scoped_attrs(attr_count - prev_attrs_size);
+    for (int i = prev_attrs_size; i < attr_count; ++i) {
+      scoped_attrs[i - prev_attrs_size] = new_scoped_symbol(attr_names[i], { SELF, DEFAULT_OBJFIELDS + i });
     }
 
     auto emit_method = [&](int arg_cnt, auto&& emit_header, auto&& emit_body) {
@@ -1431,8 +1457,9 @@ void CgenClassTable::code_methods() {
         }
         const auto formals = feature->get_formals();
         const auto arg_cnt = formals->len();
+        std::vector<std::unique_ptr<ScopedSymbol>> scoped_args(arg_cnt);
         for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
-          push_symbol_location(formals->nth(j)->get_name(), { FP, arg_cnt - j });
+          scoped_args[j] = new_scoped_symbol(formals->nth(j)->get_name(), { FP, arg_cnt - j });
         }
         emit_method(
           arg_cnt,
@@ -1444,9 +1471,6 @@ void CgenClassTable::code_methods() {
             emit_move(ACC, expr_res.REG, str);
           }
         );
-        for (int j = 0; j < arg_cnt; ++j) {
-          pop_symbol_location();
-        }
       }
     }
 
@@ -1454,9 +1478,6 @@ void CgenClassTable::code_methods() {
       process_class(process_class, child->hd());
     }
 
-    for (size_t i = prev_attrs_size; i < attr_names.size(); ++i) {
-      pop_symbol_location();
-    }
     attr_names.resize(prev_attrs_size);
     attr_exprs.resize(prev_attrs_size);
   };
@@ -1578,7 +1599,7 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   const auto expr_res = expr->code(s, codegen);
   emit_beqz(expr_res.REG, case_abort2_label, s);
-  const auto case_var_loc = codegen.allocate_temporary(expr_res.REG);
+  const auto case_var_loc = codegen.new_temporary(expr_res.REG);
   emit_load(ACC, TAG_OFFSET, expr_res.REG, s);
   emit_sll(ACC, ACC, 2, s);
   emit_partial_load_address(T1, s); emit_label_ref(jump_table_label, s); s << ENDL;
@@ -1588,15 +1609,14 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   for (int i = 0; i < cases_count; ++i) {
     emit_label_def(case_labels[i], s);
-    codegen.push_symbol_location(case_vars[i], case_var_loc);
+    const auto scoped_case_var = codegen.new_scoped_symbol(case_vars[i], case_var_loc->get());
     const auto case_expr_res = case_expr[i]->code(s, codegen);
     emit_move(ACC, case_expr_res.REG, s);
-    codegen.pop_symbol_location();
     emit_branch(case_end_label, s);
   }
 
   emit_label_def(case_abort_label, s);
-  emit_copy_to_reg(case_var_loc, ACC, s);
+  emit_copy_to_reg(case_var_loc->get(), ACC, s);
   emit_jal("_case_abort", s);
 
   emit_label_def(case_abort2_label, s);
@@ -1613,7 +1633,6 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   }
 
   emit_label_def(case_end_label, s);
-  codegen.free_temporary();
   return CodeResult{};
 }
 
@@ -1644,11 +1663,9 @@ CodeResult let_class::code(ostream &s, CodeGenerator& codegen) {
     }
     init_reg = ACC;
   }
-  const auto init_var_loc = codegen.allocate_temporary(init_reg);
-  codegen.push_symbol_location(identifier, init_var_loc);
+  const auto let_var_loc = codegen.new_temporary(init_reg);
+  const auto scoped_let_var = codegen.new_scoped_symbol(identifier, let_var_loc->get());
   const auto body_res = body->code(s, codegen);
-  codegen.pop_symbol_location();
-  codegen.free_temporary();
   return body_res;
 }
 
@@ -1661,14 +1678,12 @@ static void create_object(Symbol type, ostream &s) {
 template <auto emit_arith_op>
 CodeResult code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.allocate_temporary(e1_res.REG);
+  const auto e1_loc = codegen.new_temporary(e1_res.REG);
   const auto e2_res = e2->code(s, codegen);
-  const auto e2_loc = codegen.allocate_temporary(e2_res.REG);
+  const auto e2_loc = codegen.new_temporary(e2_res.REG);
   create_object(Int, s);
-  emit_fetch_attr(e2_loc, kIntValAttr, T2, s);
-  codegen.free_temporary();
-  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
-  codegen.free_temporary();
+  emit_fetch_attr(e2_loc->get(), kIntValAttr, T2, s);
+  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
   emit_arith_op(T1, T1, T2, s);
   emit_store_int(T1, ACC, s);
   return CodeResult{};
@@ -1697,10 +1712,9 @@ CodeResult divide_class::code(ostream &s, CodeGenerator& codegen) {
 CodeResult neg_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("neg", line_number);
   const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.allocate_temporary(e1_res.REG);
+  const auto e1_loc = codegen.new_temporary(e1_res.REG);
   create_object(Int, s);
-  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
-  codegen.free_temporary();
+  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
   emit_neg(T1, T1, s);
   emit_store_int(T1, ACC, s);
   return CodeResult{};
@@ -1709,11 +1723,10 @@ CodeResult neg_class::code(ostream &s, CodeGenerator& codegen) {
 CodeResult eq_class::code(ostream &s, CodeGenerator& codegen) {
   auto a = codegen.annotate("eq", line_number);
   const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.allocate_temporary(e1_res.REG);
+  const auto e1_loc = codegen.new_temporary(e1_res.REG);
   const auto e2_res = e2->code(s, codegen);
   emit_move(T2, e2_res.REG, s);
-  emit_copy_to_reg(e1_loc, T1, s);
-  codegen.free_temporary();
+  emit_copy_to_reg(e1_loc->get(), T1, s);
   const auto eq_label = codegen.create_label();
   emit_load_bool(ACC, truebool, s);
   emit_beq(T1, T2, eq_label, s);
@@ -1726,11 +1739,10 @@ CodeResult eq_class::code(ostream &s, CodeGenerator& codegen) {
 template<auto emit_cmp_branch>
 CodeResult code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
   const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.allocate_temporary(e1_res.REG);
+  const auto e1_loc = codegen.new_temporary(e1_res.REG);
   const auto e2_res = e2->code(s, codegen);
   emit_fetch_int(ACC, e2_res.REG, s);
-  emit_fetch_attr(e1_loc, kIntValAttr, T1, s);
-  codegen.free_temporary();
+  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
   const auto label_if_true = codegen.create_label();
   const auto label_end = codegen.create_label();
   emit_cmp_branch(T1, ACC, label_if_true, s);
@@ -1794,16 +1806,15 @@ CodeResult new__class::code(ostream &s, CodeGenerator& codegen) {
     emit_sll(T2, T2, 3, s);
     emit_addu(T1, T1, T2, s);
     emit_load(ACC, 1, T1, s);
-    const auto init_loc = codegen.allocate_temporary(ACC);
+    const auto init_loc = codegen.new_temporary(ACC);
     emit_load(ACC, 0, T1, s);
     emit_jal(OBJECT_COPY, s);
-    if (init_loc.offset) {
-      emit_copy_to_reg(init_loc, T1, s);
+    if (init_loc->get().offset) {
+      emit_copy_to_reg(init_loc->get(), T1, s);
       emit_jalr(T1, s);
     } else {
-      emit_jalr(init_loc.reg, s);
+      emit_jalr(init_loc->get().reg, s);
     }
-    codegen.free_temporary();
   } else {
     create_object(type_name, s);
   }

@@ -78,12 +78,14 @@ private:
       temporaries_used = 0;
    }
 
+   friend class TemporaryImpl;
+   friend class ScopedSymbolImpl;
    int create_label() override;
-   SymbolLocation allocate_temporary(Register value_reg) override;
-   void free_temporary() override;
+   std::unique_ptr<Temporary> new_temporary(Register value_reg) override;
+   void delete_temporary();
    SymbolLocation get_symbol_location(Symbol name) override;
-   void push_symbol_location(Symbol name, SymbolLocation loc) override;
-   void pop_symbol_location() override;
+   std::unique_ptr<ScopedSymbol> new_scoped_symbol(Symbol name, SymbolLocation loc) override;
+   void delete_scoped_symbol();
    FindMethodResult find_method(Symbol class_name, Symbol method_name) override;
 	std::vector<int> create_jump_table(const std::vector<Symbol>& types) override;
 	char* get_filename() override;

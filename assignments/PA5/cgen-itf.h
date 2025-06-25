@@ -62,15 +62,22 @@ struct CodeResult {
   Register REG = Register::ACC;
 };
 
+struct Temporary {
+  virtual ~Temporary() {};
+  virtual SymbolLocation get() = 0;
+};
+
+struct ScopedSymbol {
+  virtual ~ScopedSymbol() {};
+};
+
 class CodeGenerator {
 public:
   virtual ~CodeGenerator() {};
   virtual int create_label() = 0;
-  virtual SymbolLocation allocate_temporary(Register value_reg) = 0;
-  virtual void free_temporary() = 0;
+  virtual std::unique_ptr<Temporary> new_temporary(Register value_reg) = 0;
   virtual SymbolLocation get_symbol_location(Symbol name) = 0;
-  virtual void push_symbol_location(Symbol name, SymbolLocation loc) = 0;
-  virtual void pop_symbol_location() = 0;
+  virtual std::unique_ptr<ScopedSymbol> new_scoped_symbol(Symbol name, SymbolLocation loc) = 0;
   virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;
   virtual std::vector<int> create_jump_table(const std::vector<Symbol>& types) = 0;
   virtual char* get_filename() = 0;
