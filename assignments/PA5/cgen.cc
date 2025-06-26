@@ -1731,19 +1731,14 @@ std::unique_ptr<Location> let_class::code(ostream &s, CodeGenerator& codegen, bo
   return body->code(s, codegen, alloc_res);
 }
 
-static void create_object(Symbol type, ostream &s) {
-  emit_partial_load_address(ACC, s); emit_protobj_ref(type, s); s << ENDL;
-  emit_jal(OBJECT_COPY, s);
-  s << JAL; emit_init_ref(type, s); s << ENDL;
-}
-
 template <auto emit_arith_op>
 std::unique_ptr<Location> code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto res = create_result(codegen, alloc_res);
   const auto e1_loc = e1->code(s, codegen, true);
-  const auto e2_loc = e2->code(s, codegen, true);
-  create_object(Int, s);
-  emit_loc_attr_to_reg(e2_loc->get(), kIntAttr, T2, s);
+  const auto e2_loc = e2->code(s, codegen, false);
+  emit_loc_to_reg(e2_loc->get(), ACC, s);
+  emit_jal(OBJECT_COPY, s);
+  emit_fetch_int(T2, ACC, s);
   emit_loc_attr_to_reg(e1_loc->get(), kIntAttr, T1, s);
   emit_arith_op(T1, T1, T2, s);
   emit_store_int(T1, ACC, s);
@@ -1774,9 +1769,10 @@ std::unique_ptr<Location> divide_class::code(ostream &s, CodeGenerator& codegen,
 std::unique_ptr<Location> neg_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("neg", line_number);
   auto res = create_result(codegen, alloc_res);
-  const auto e1_loc = e1->code(s, codegen, true);
-  create_object(Int, s);
-  emit_loc_attr_to_reg(e1_loc->get(), kIntAttr, T1, s);
+  const auto e1_loc = e1->code(s, codegen, false);
+  emit_loc_to_reg(e1_loc->get(), ACC, s);
+  emit_jal(OBJECT_COPY, s);
+  emit_fetch_int(T1, ACC, s);
   emit_neg(T1, T1, s);
   emit_store_int(T1, ACC, s);
   emit_reg_to_loc(ACC, res->get(), s);
@@ -1874,7 +1870,9 @@ std::unique_ptr<Location> new__class::code(ostream &s, CodeGenerator& codegen, b
     emit_jal(OBJECT_COPY, s);
     emit_jalr(emit_loc_copy_or_get_reg(init_loc->get(), T1, s), s);
   } else {
-    create_object(type_name, s);
+    emit_partial_load_address(ACC, s); emit_protobj_ref(type_name, s); s << ENDL;
+    emit_jal(OBJECT_COPY, s);
+    s << JAL; emit_init_ref(type_name, s); s << ENDL;
   }
   emit_reg_to_loc(ACC, res->get(), s);
   return res;
