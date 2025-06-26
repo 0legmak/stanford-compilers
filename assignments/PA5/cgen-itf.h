@@ -58,12 +58,8 @@ struct Annotate {
   virtual ~Annotate() {};
 };
 
-struct CodeResult {
-  Register REG = Register::ACC;
-};
-
-struct Temporary {
-  virtual ~Temporary() {};
+struct Location {
+  virtual ~Location() {};
   virtual SymbolLocation get() = 0;
 };
 
@@ -75,7 +71,7 @@ class CodeGenerator {
 public:
   virtual ~CodeGenerator() {};
   virtual int create_label() = 0;
-  virtual std::unique_ptr<Temporary> new_temporary(Register value_reg) = 0;
+  virtual std::unique_ptr<Location> new_location() = 0;
   virtual SymbolLocation get_symbol_location(Symbol name) = 0;
   virtual std::unique_ptr<ScopedSymbol> new_scoped_symbol(Symbol name, SymbolLocation loc) = 0;
   virtual FindMethodResult find_method(Symbol class_name, Symbol method_name) = 0;

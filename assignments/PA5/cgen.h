@@ -78,11 +78,11 @@ private:
       temporaries_used = 0;
    }
 
-   friend class TemporaryImpl;
+   friend class LocationImpl;
    friend class ScopedSymbolImpl;
    int create_label() override;
-   std::unique_ptr<Temporary> new_temporary(Register value_reg) override;
-   void delete_temporary();
+   std::unique_ptr<Location> new_location() override;
+   void delete_location();
    SymbolLocation get_symbol_location(Symbol name) override;
    std::unique_ptr<ScopedSymbol> new_scoped_symbol(Symbol name, SymbolLocation loc) override;
    void delete_scoped_symbol();

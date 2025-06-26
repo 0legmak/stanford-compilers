@@ -116,13 +116,13 @@ Expression get_expr() override { return expr; } \
 Symbol type;                                 \
 Symbol get_type() { return type; }           \
 Expression set_type(Symbol s) { type = s; return this; } \
-virtual CodeResult code(ostream&, CodeGenerator& codegen) = 0; \
+virtual std::unique_ptr<Location> code(ostream&, CodeGenerator& codegen, bool alloc_res) = 0; \
 virtual void dump_with_types(ostream&,int) = 0;  \
 void dump_type(ostream&, int);               \
 Expression_class() { type = (Symbol) NULL; }
 
 #define Expression_SHARED_EXTRAS           \
-CodeResult code(ostream&, CodeGenerator& codegen); 			   \
+std::unique_ptr<Location> code(ostream&, CodeGenerator& codegen, bool alloc_res); \
 void dump_with_types(ostream&,int); 
 
 

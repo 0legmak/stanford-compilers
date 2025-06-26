@@ -449,10 +449,6 @@ static void emit_fetch_int(Register dest, Register source, ostream& s)
 static void emit_store_int(Register source, Register dest, ostream& s)
 { emit_store(source, DEFAULT_OBJFIELDS, dest, s); }
 
-static void emit_fetch_bool(Register dest, Register source, ostream& s) {
-  emit_load(dest, DEFAULT_OBJFIELDS, source, s);
-}
-
 static void emit_slti(Register dest, Register source, int imm, ostream& s) {
   s << SLTI << rn(dest) << " " << rn(source) << " " << imm << ENDL;
 }
@@ -473,18 +469,17 @@ static void emit_gc_check(Register source, ostream &s)
   s << JAL << "_gc_check" << ENDL;
 }
 
-constexpr int kIntValAttr = 0;
+// Location handling
 
-void emit_fetch_attr(const SymbolLocation src, int attr_idx, Register dst, ostream &s) {
+static Register emit_loc_copy_or_get_reg(const SymbolLocation src, Register maybe_dst, ostream &s) {
   if (src.offset) {
-    emit_load(dst, *src.offset, src.reg, s);
-    emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, dst, s);
-  } else {
-    emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, src.reg, s);
+    emit_load(maybe_dst, *src.offset, src.reg, s);
+    return maybe_dst;
   }
+  return src.reg;
 }
 
-void emit_copy_to_reg(const SymbolLocation src, Register dst, ostream &s) {
+static void emit_loc_to_reg(const SymbolLocation src, Register dst, ostream &s) {
   if (src.offset) {
     emit_load(dst, *src.offset, src.reg, s);
   } else {
@@ -492,19 +487,70 @@ void emit_copy_to_reg(const SymbolLocation src, Register dst, ostream &s) {
   }
 }
 
+static void emit_reg_to_loc(Register src, const SymbolLocation dst, ostream &s) {
+  if (dst.offset) {
+    emit_store(src, *dst.offset, dst.reg, s);
+  } else {
+    emit_move(dst.reg, src, s);
+  }
+}
+
+constexpr int kIntAttr = 0;
+constexpr int kBoolAttr = 0;
+
+static void emit_loc_attr_to_reg(const SymbolLocation src, int attr_idx, Register dst, ostream &s) {
+  emit_load(dst, DEFAULT_OBJFIELDS + attr_idx, emit_loc_copy_or_get_reg(src, dst, s), s);
+}
+
+static void emit_loc_to_loc(const SymbolLocation src, const SymbolLocation dst, Register tmp_reg, ostream &s) {
+  if (src.offset && dst.offset) {
+    emit_loc_to_reg(src, tmp_reg, s);
+    emit_reg_to_loc(tmp_reg, dst, s);
+  } else if (src.offset) {
+    emit_loc_to_reg(src, dst.reg, s);
+  } else if (dst.offset) {
+    emit_reg_to_loc(src.reg, dst, s);
+  } else {
+    emit_move(dst.reg, src.reg, s);
+  }
+}
+
+static void emit_bool_const_to_loc(const BoolConst src, const SymbolLocation dst, Register tmp_reg, ostream &s) {
+  if (dst.offset) {
+    emit_load_bool(tmp_reg, src, s);
+    emit_reg_to_loc(tmp_reg, dst, s);
+  } else {
+    emit_load_bool(dst.reg, src, s);
+  }
+}
+
+static void emit_int_const_to_loc(const IntEntryP src, const SymbolLocation dst, Register tmp_reg, ostream &s) {
+  if (dst.offset) {
+    emit_load_int(tmp_reg, src, s);
+    emit_reg_to_loc(tmp_reg, dst, s);
+  } else {
+    emit_load_int(dst.reg, src, s);
+  }
+}
+
+static void emit_str_const_to_loc(const StringEntryP src, const SymbolLocation dst, Register tmp_reg, ostream &s) {
+  if (dst.offset) {
+    emit_load_string(tmp_reg, src, s);
+    emit_reg_to_loc(tmp_reg, dst, s);
+  } else {
+    emit_load_string(dst.reg, src, s);
+  }
+}
+
 static bool is_attr_location(const SymbolLocation loc) {
   return loc.offset && loc.reg == SELF;
 }
 
-void emit_assign(const Register src, const SymbolLocation dst, ostream& s) {
-  if (dst.offset) {
-    emit_store(src, *dst.offset, dst.reg, s);
-    if (cgen_Memmgr != GC_NOGC && is_attr_location(dst)) {
-      emit_addiu(A1, dst.reg, *dst.offset * WORD_SIZE, s);
-      emit_gc_assign(s);
-    }
-  } else {
-    emit_move(dst.reg, src, s);
+static void emit_assign(const SymbolLocation src, const SymbolLocation dst, Register tmp_reg, ostream& s) {
+  emit_loc_to_loc(src, dst, tmp_reg, s);
+  if (cgen_Memmgr != GC_NOGC && is_attr_location(dst)) {
+    emit_addiu(A1, dst.reg, *dst.offset * WORD_SIZE, s);
+    emit_gc_assign(s);
   }
 }
 
@@ -1210,40 +1256,46 @@ static std::ostream& operator<<(std::ostream& os, const SymbolLocation& loc) {
   return os;
 }
 
-class TemporaryImpl : public Temporary {
+class LocationImpl : public Location {
 public:
-  TemporaryImpl(CgenClassTable& tbl, SymbolLocation loc) : tbl(tbl), loc(loc) {}
-  ~TemporaryImpl() override {
-    tbl.delete_temporary();
+  LocationImpl(CgenClassTable* tbl, SymbolLocation loc)
+    : tbl(tbl), loc(loc)
+  {}
+  ~LocationImpl() override {
+    if (tbl) {
+      tbl->delete_location();
+    }
   }
   SymbolLocation get() override {
     return loc;
   }
 private:
-  CgenClassTable& tbl;
-  SymbolLocation loc;
+  CgenClassTable* tbl;
+  const SymbolLocation loc;
 };
 
-std::unique_ptr<Temporary> CgenClassTable::new_temporary(Register value_reg) {
+std::unique_ptr<Location> CgenClassTable::new_location() {
   SymbolLocation loc;
   if (registers_used_cnt < registers_for_temporaries.size()) {
     loc = { registers_for_temporaries[registers_used_cnt] };
     ++registers_used_cnt;
-    emit_move(loc.reg, value_reg, str);
   } else {
     loc = { FP, curr_fp_offset };
     --curr_fp_offset;
-    emit_store(value_reg, *loc.offset, loc.reg, str);
   }
   temporaries_stack.push(loc);
   temporaries_used = std::max(temporaries_used, temporaries_stack.size());
   if (cgen_debug) {
     std::cerr << "Allocated temporary at " << loc << ", current FP offset: " << curr_fp_offset << std::endl;
   }
-  return std::make_unique<TemporaryImpl>(*this, loc);
+  return std::make_unique<LocationImpl>(this, loc);
 }
 
-void CgenClassTable::delete_temporary() {
+static std::unique_ptr<Location> existing_location(SymbolLocation loc) {
+  return std::make_unique<LocationImpl>(nullptr, loc);
+}
+
+void CgenClassTable::delete_location() {
   const SymbolLocation loc = temporaries_stack.top();
   temporaries_stack.pop();
   if (loc.offset) {
@@ -1441,8 +1493,8 @@ void CgenClassTable::code_methods() {
       [&]() {
         for (int i = 0; i < attr_count; ++i) {
           if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
-            const auto attr_expr_res = attr_exprs[i]->code(str, *this);
-            emit_assign(attr_expr_res.REG, { SELF, DEFAULT_OBJFIELDS + i }, str);
+            const auto attr_expr_loc = attr_exprs[i]->code(str, *this, false);
+            emit_assign(attr_expr_loc->get(), get_symbol_location(attr_names[i]), T1, str);
           }
         }
         emit_move(ACC, SELF, str);
@@ -1467,8 +1519,8 @@ void CgenClassTable::code_methods() {
             emit_method_ref(class_name, feature->get_name(), str); str << LABEL;
           },
           [&]() {
-            const auto expr_res = feature->get_expr()->code(str, *this);
-            emit_move(ACC, expr_res.REG, str);
+            const auto expr_loc = feature->get_expr()->code(str, *this, false);
+            emit_loc_to_reg(expr_loc->get(), ACC, str);
           }
         );
       }
@@ -1494,14 +1546,18 @@ void CgenClassTable::code_dispatch_abort_handlers() {
   }
 }
 
-CodeResult assign_class::code(ostream &s, CodeGenerator& codegen) {
-  auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
-  const auto expr_res = expr->code(s, codegen);
-  emit_assign(expr_res.REG, codegen.get_symbol_location(name), s);
-  return expr_res;
+static std::unique_ptr<Location> create_result(CodeGenerator& codegen, bool alloc_res) {
+  return alloc_res ? codegen.new_location() : existing_location({ .reg = ACC });
 }
 
-CodeResult code_dispatch(
+std::unique_ptr<Location> assign_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
+  auto a = codegen.annotate(std::string("assign '") + name->get_string() + "'", line_number);
+  auto expr_loc = expr->code(s, codegen, alloc_res);
+  emit_assign(expr_loc->get(), codegen.get_symbol_location(name), T1, s);
+  return expr_loc;
+}
+
+std::unique_ptr<Location> code_dispatch(
   bool dynamic,
   Expression expr,
   Symbol type,
@@ -1509,22 +1565,25 @@ CodeResult code_dispatch(
   Expressions args,
   int line_number,
   ostream &s,
-  CodeGenerator& codegen
+  CodeGenerator& codegen,
+  bool alloc_res
 ) {
+  auto res = create_result(codegen, alloc_res);
   const auto [class_name, disp_table_index, arg_names] =
     codegen.find_method(dynamic ? expr->get_type() : type, method_name);
   const auto arg_cnt = arg_names.size();
   for (int i = args->first(); args->more(i); i = args->next(i)) {
     const auto arg_expr = args->nth(i);
-    const auto arg_expr_res = arg_expr->code(s, codegen);
-    emit_push(arg_expr_res.REG, s);
+    const auto arg_expr_loc = arg_expr->code(s, codegen, false);
+    emit_store(emit_loc_copy_or_get_reg(arg_expr_loc->get(), T1, s), 0, SP, s);
+    emit_addiu(SP, SP, -WORD_SIZE, s);
   }
-  const auto expr_res = expr->code(s, codegen);
+  const auto expr_loc = expr->code(s, codegen, false);
   const auto dispatch_abort_label = codegen.get_dispatch_abort_label(
     stringtable.lookup_string(codegen.get_filename()), line_number
   );
-  emit_beqz(expr_res.REG, dispatch_abort_label, s);
-  emit_move(ACC, expr_res.REG, s);
+  emit_loc_to_reg(expr_loc->get(), ACC, s);
+  emit_beqz(ACC, dispatch_abort_label, s);
   if (dynamic) {
     emit_load(T1, DISPTABLE_OFFSET, ACC, s);
     emit_load(T1, disp_table_index, T1, s);
@@ -1532,53 +1591,57 @@ CodeResult code_dispatch(
   } else {
     s << JAL; emit_method_ref(class_name, method_name, s); s << ENDL;
   }
-  return CodeResult{};
+  emit_reg_to_loc(ACC, res->get(), s);
+  return res;
 }
 
-CodeResult static_dispatch_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> static_dispatch_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate(std::string(type_name->get_string()) + "." + name->get_string() + "()", line_number);
-  return code_dispatch(false, expr, type_name, name, actual, line_number, s, codegen);
+  return code_dispatch(false, expr, type_name, name, actual, line_number, s, codegen, alloc_res);
 }
 
-CodeResult dispatch_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> dispatch_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate(std::string(name->get_string()) + "()", line_number);
-  return code_dispatch(true, expr, nullptr, name, actual, line_number, s, codegen);
+  return code_dispatch(true, expr, nullptr, name, actual, line_number, s, codegen, alloc_res);
 }
 
-CodeResult cond_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> cond_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("if", line_number);
+  auto res = create_result(codegen, alloc_res);
   const auto label_if_false = codegen.create_label();
   const auto label_end = codegen.create_label();
-  const auto pred_res = pred->code(s, codegen);
-  emit_fetch_bool(ACC, pred_res.REG, s);
+  const auto pred_loc = pred->code(s, codegen, false);
+  emit_loc_attr_to_reg(pred_loc->get(), kBoolAttr, ACC, s);
   emit_beqz(ACC, label_if_false, s);
-  const auto then_exp_res = then_exp->code(s, codegen);
-  emit_move(ACC, then_exp_res.REG, s);
+  const auto then_exp_loc = then_exp->code(s, codegen, false);
+  emit_loc_to_loc(then_exp_loc->get(), res->get(), T1, s);
   emit_branch(label_end, s);
   emit_label_def(label_if_false, s);
-  const auto else_exp_res = else_exp->code(s, codegen);
-  emit_move(ACC, else_exp_res.REG, s);
+  const auto else_exp_loc = else_exp->code(s, codegen, false);
+  emit_loc_to_loc(else_exp_loc->get(), res->get(), T1, s);
   emit_label_def(label_end, s);
-  return CodeResult{};
+  return res;
 }
 
-CodeResult loop_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> loop_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("loop", line_number);
+  auto res = create_result(codegen, alloc_res);
   const auto label_start = codegen.create_label();
   const auto label_end = codegen.create_label();
   emit_label_def(label_start, s);
-  const auto pred_res = pred->code(s, codegen);
-  emit_fetch_bool(ACC, pred_res.REG, s);
+  const auto pred_loc = pred->code(s, codegen, false);
+  emit_loc_attr_to_reg(pred_loc->get(), kBoolAttr, ACC, s);
   emit_beqz(ACC, label_end, s);
-  const auto body_res = body->code(s, codegen);
+  body->code(s, codegen, false);
   emit_branch(label_start, s);
   emit_label_def(label_end, s);
-  emit_move(ACC, ZERO, s);
-  return CodeResult{};
+  emit_reg_to_loc(ZERO, res->get(), s);
+  return res;
 }
 
-CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> typcase_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("case", line_number);
+  auto res = create_result(codegen, alloc_res);
   const int cases_count = cases->len();
   std::vector<Symbol> types(cases_count);
   std::vector<int> case_labels(cases_count);
@@ -1597,10 +1660,10 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   const auto case_abort_label = codegen.create_label();
   const auto case_abort2_label = codegen.create_label();
   
-  const auto expr_res = expr->code(s, codegen);
-  emit_beqz(expr_res.REG, case_abort2_label, s);
-  const auto case_var_loc = codegen.new_temporary(expr_res.REG);
-  emit_load(ACC, TAG_OFFSET, expr_res.REG, s);
+  const auto case_expr_loc = expr->code(s, codegen, true);
+  const auto REG1 = emit_loc_copy_or_get_reg(case_expr_loc->get(), ACC, s);
+  emit_beqz(REG1, case_abort2_label, s);
+  emit_load(ACC, TAG_OFFSET, REG1, s);
   emit_sll(ACC, ACC, 2, s);
   emit_partial_load_address(T1, s); emit_label_ref(jump_table_label, s); s << ENDL;
   emit_addu(ACC, T1, ACC, s);
@@ -1609,14 +1672,14 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   
   for (int i = 0; i < cases_count; ++i) {
     emit_label_def(case_labels[i], s);
-    const auto scoped_case_var = codegen.new_scoped_symbol(case_vars[i], case_var_loc->get());
-    const auto case_expr_res = case_expr[i]->code(s, codegen);
-    emit_move(ACC, case_expr_res.REG, s);
+    const auto scoped_case_var = codegen.new_scoped_symbol(case_vars[i], case_expr_loc->get());
+    const auto case_expr_loc = case_expr[i]->code(s, codegen, false);
+    emit_loc_to_loc(case_expr_loc->get(), res->get(), T1, s);
     emit_branch(case_end_label, s);
   }
 
   emit_label_def(case_abort_label, s);
-  emit_copy_to_reg(case_var_loc->get(), ACC, s);
+  emit_loc_to_reg(case_expr_loc->get(), ACC, s);
   emit_jal("_case_abort", s);
 
   emit_label_def(case_abort2_label, s);
@@ -1633,40 +1696,39 @@ CodeResult typcase_class::code(ostream &s, CodeGenerator& codegen) {
   }
 
   emit_label_def(case_end_label, s);
-  return CodeResult{};
+  return res;
 }
 
-CodeResult block_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> block_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("block", line_number);
-  CodeResult code_res;
+  std::unique_ptr<Location> res;
+  const int expr_cnt = body->len();
   for (int i = body->first(); body->more(i); i = body->next(i)) {
     const auto expr = body->nth(i);
-    code_res = expr->code(s, codegen);
+    res = expr->code(s, codegen, i + 1 == expr_cnt && alloc_res);
   }
-  return code_res;
+  return res;
 }
 
-CodeResult let_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> let_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate(std::string("let '") + identifier->get_string() + ":" + type_decl->get_string() + "'", line_number);
-  Register init_reg;
+  std::unique_ptr<Location> let_var_loc;
   if (init->get_type() && init->get_type() != No_type) {
-    init_reg = init->code(s, codegen).REG;
+    let_var_loc = init->code(s, codegen, true);
   } else {
+    let_var_loc = codegen.new_location();
     if (type_decl == Int) {
-      emit_load_int(ACC, zero_int, s);
+      emit_int_const_to_loc(zero_int, let_var_loc->get(), T1, s);
     } else if (type_decl == Bool) {
-      emit_load_bool(ACC, falsebool, s);
+      emit_bool_const_to_loc(falsebool, let_var_loc->get(), T1, s);
     } else if (type_decl == Str) {
-      emit_load_string(ACC, empty_string, s);
+      emit_str_const_to_loc(empty_string, let_var_loc->get(), T1, s);
     } else {
-      emit_move(ACC, ZERO, s);
+      emit_reg_to_loc(ZERO, let_var_loc->get(), s);
     }
-    init_reg = ACC;
   }
-  const auto let_var_loc = codegen.new_temporary(init_reg);
   const auto scoped_let_var = codegen.new_scoped_symbol(identifier, let_var_loc->get());
-  const auto body_res = body->code(s, codegen);
-  return body_res;
+  return body->code(s, codegen, alloc_res);
 }
 
 static void create_object(Symbol type, ostream &s) {
@@ -1676,170 +1738,166 @@ static void create_object(Symbol type, ostream &s) {
 }
 
 template <auto emit_arith_op>
-CodeResult code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
-  const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.new_temporary(e1_res.REG);
-  const auto e2_res = e2->code(s, codegen);
-  const auto e2_loc = codegen.new_temporary(e2_res.REG);
+std::unique_ptr<Location> code_arith(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen, bool alloc_res) {
+  auto res = create_result(codegen, alloc_res);
+  const auto e1_loc = e1->code(s, codegen, true);
+  const auto e2_loc = e2->code(s, codegen, true);
   create_object(Int, s);
-  emit_fetch_attr(e2_loc->get(), kIntValAttr, T2, s);
-  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
+  emit_loc_attr_to_reg(e2_loc->get(), kIntAttr, T2, s);
+  emit_loc_attr_to_reg(e1_loc->get(), kIntAttr, T1, s);
   emit_arith_op(T1, T1, T2, s);
   emit_store_int(T1, ACC, s);
-  return CodeResult{};
+  emit_reg_to_loc(ACC, res->get(), s);
+  return res;
 }
 
-CodeResult plus_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> plus_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("plus", line_number);
-  return code_arith<emit_add>(e1, e2, s, codegen);
+  return code_arith<emit_add>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult sub_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> sub_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("sub", line_number);
-  return code_arith<emit_sub>(e1, e2, s, codegen);
+  return code_arith<emit_sub>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult mul_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> mul_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("mul", line_number);
-  return code_arith<emit_mul>(e1, e2, s, codegen);
+  return code_arith<emit_mul>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult divide_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> divide_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("div", line_number);
-  return code_arith<emit_div>(e1, e2, s, codegen);
+  return code_arith<emit_div>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult neg_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> neg_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("neg", line_number);
-  const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.new_temporary(e1_res.REG);
+  auto res = create_result(codegen, alloc_res);
+  const auto e1_loc = e1->code(s, codegen, true);
   create_object(Int, s);
-  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
+  emit_loc_attr_to_reg(e1_loc->get(), kIntAttr, T1, s);
   emit_neg(T1, T1, s);
   emit_store_int(T1, ACC, s);
-  return CodeResult{};
+  emit_reg_to_loc(ACC, res->get(), s);
+  return res;
 }
 
-CodeResult eq_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> eq_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("eq", line_number);
-  const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.new_temporary(e1_res.REG);
-  const auto e2_res = e2->code(s, codegen);
-  emit_move(T2, e2_res.REG, s);
-  emit_copy_to_reg(e1_loc->get(), T1, s);
+  auto res = create_result(codegen, alloc_res);
   const auto eq_label = codegen.create_label();
+  const auto e1_loc = e1->code(s, codegen, true);
+  const auto e2_loc = e2->code(s, codegen, false);
+  emit_loc_to_reg(e2_loc->get(), T2, s);
+  emit_loc_to_reg(e1_loc->get(), T1, s);
   emit_load_bool(ACC, truebool, s);
   emit_beq(T1, T2, eq_label, s);
   emit_load_bool(A1, falsebool, s);
   emit_jal("equality_test", s);
   emit_label_def(eq_label, s);
-  return CodeResult{};
+  emit_reg_to_loc(ACC, res->get(), s);
+  return res;
 }
 
 template<auto emit_cmp_branch>
-CodeResult code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen) {
-  const auto e1_res = e1->code(s, codegen);
-  const auto e1_loc = codegen.new_temporary(e1_res.REG);
-  const auto e2_res = e2->code(s, codegen);
-  emit_fetch_int(T2, e2_res.REG, s);
-  emit_fetch_attr(e1_loc->get(), kIntValAttr, T1, s);
+std::unique_ptr<Location> code_comparison(Expression e1, Expression e2, ostream &s, CodeGenerator& codegen, bool alloc_res) {
+  auto res = create_result(codegen, alloc_res);
   const auto label_if_true = codegen.create_label();
-  emit_load_bool(ACC, truebool, s);
+  const auto e1_loc = e1->code(s, codegen, true);
+  const auto e2_loc = e2->code(s, codegen, false);
+  emit_loc_attr_to_reg(e2_loc->get(), kIntAttr, T2, s);
+  emit_loc_attr_to_reg(e1_loc->get(), kIntAttr, T1, s);
+  emit_bool_const_to_loc(truebool, res->get(), T3, s);
   emit_cmp_branch(T1, T2, label_if_true, s);
-  emit_load_bool(ACC, falsebool, s);
+  emit_bool_const_to_loc(falsebool, res->get(), T3, s);
   emit_label_def(label_if_true, s);
-  return CodeResult{};
+  return res;
 }
 
-CodeResult lt_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> lt_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("lt", line_number);
-  return code_comparison<emit_blt>(e1, e2, s, codegen);
+  return code_comparison<emit_blt>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult leq_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> leq_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("leq", line_number);
-  return code_comparison<emit_bleq>(e1, e2, s, codegen);
+  return code_comparison<emit_bleq>(e1, e2, s, codegen, alloc_res);
 }
 
-CodeResult comp_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> comp_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("not", line_number);
+  auto res = create_result(codegen, alloc_res);
   const auto label_if_zero = codegen.create_label();
-  const auto e1_res = e1->code(s, codegen);
-  emit_fetch_bool(T1, e1_res.REG, s);
-  emit_load_bool(ACC, truebool, s);
+  const auto e1_loc = e1->code(s, codegen, false);
+  emit_loc_attr_to_reg(e1_loc->get(), kBoolAttr, T1, s);
+  emit_bool_const_to_loc(truebool, res->get(), T3, s);
   emit_beqz(T1, label_if_zero, s);
-  emit_load_bool(ACC, falsebool, s);
+  emit_bool_const_to_loc(falsebool, res->get(), T3, s);
   emit_label_def(label_if_zero, s);
-  return CodeResult{};
+  return res;
 }
 
-CodeResult int_const_class::code(ostream& s, CodeGenerator& codegen) {
+std::unique_ptr<Location> int_const_class::code(ostream& s, CodeGenerator& codegen, bool alloc_res) {
   //
   // Need to be sure we have an IntEntry *, not an arbitrary Symbol
   //
-  emit_load_int(ACC, inttable.lookup_string(token->get_string()), s);
-  return CodeResult{};
+  auto res = create_result(codegen, alloc_res);
+  emit_int_const_to_loc(inttable.lookup_string(token->get_string()), res->get(), T1, s);
+  return res;
 }
 
-CodeResult string_const_class::code(ostream& s, CodeGenerator& codegen) {
-  emit_load_string(ACC, stringtable.lookup_string(token->get_string()), s);
-  return CodeResult{};
+std::unique_ptr<Location> string_const_class::code(ostream& s, CodeGenerator& codegen, bool alloc_res) {
+  auto res = create_result(codegen, alloc_res);
+  emit_str_const_to_loc(stringtable.lookup_string(token->get_string()), res->get(), T1, s);
+  return res;
 }
 
-CodeResult bool_const_class::code(ostream& s, CodeGenerator& codegen) {
-  emit_load_bool(ACC, BoolConst(val), s);
-  return CodeResult{};
+std::unique_ptr<Location> bool_const_class::code(ostream& s, CodeGenerator& codegen, bool alloc_res) {
+  auto res = create_result(codegen, alloc_res);
+  emit_bool_const_to_loc(BoolConst(val), res->get(), T1, s);
+  return res;
 }
 
-CodeResult new__class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> new__class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate(std::string("new '") + type_name->get_string() + "'", line_number);
+  auto res = create_result(codegen, alloc_res);
   if (type_name == SELF_TYPE) {
     emit_load_address(T1, CLASSOBJTAB, s);
     emit_load(T2, TAG_OFFSET, SELF, s);
     emit_sll(T2, T2, 3, s);
     emit_addu(T1, T1, T2, s);
     emit_load(ACC, 1, T1, s);
-    const auto init_loc = codegen.new_temporary(ACC);
+    const auto init_loc = codegen.new_location();
+    emit_reg_to_loc(ACC, init_loc->get(), s);
     emit_load(ACC, 0, T1, s);
     emit_jal(OBJECT_COPY, s);
-    if (init_loc->get().offset) {
-      emit_copy_to_reg(init_loc->get(), T1, s);
-      emit_jalr(T1, s);
-    } else {
-      emit_jalr(init_loc->get().reg, s);
-    }
+    emit_jalr(emit_loc_copy_or_get_reg(init_loc->get(), T1, s), s);
   } else {
     create_object(type_name, s);
   }
-  return CodeResult{};
+  emit_reg_to_loc(ACC, res->get(), s);
+  return res;
 }
 
-CodeResult isvoid_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> isvoid_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate("isvoid", line_number);
+  auto res = create_result(codegen, alloc_res);
   const auto label_if_zero = codegen.create_label();
-  const auto e1_res = e1->code(s, codegen);
-  emit_move(T1, e1_res.REG, s);
-  emit_load_bool(ACC, truebool, s);
+  const auto e1_loc = e1->code(s, codegen, false);
+  emit_loc_to_reg(e1_loc->get(), T1, s);
+  emit_bool_const_to_loc(truebool, res->get(), T3, s);
   emit_beqz(T1, label_if_zero, s);
-  emit_load_bool(ACC, falsebool, s);
+  emit_bool_const_to_loc(falsebool, res->get(), T3, s);
   emit_label_def(label_if_zero, s);
-  return CodeResult{};
+  return res;
 }
 
-CodeResult no_expr_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> no_expr_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   throw std::logic_error("no_expr must not participate code generation");
 }
 
-CodeResult object_class::code(ostream &s, CodeGenerator& codegen) {
+std::unique_ptr<Location> object_class::code(ostream &s, CodeGenerator& codegen, bool alloc_res) {
   auto a = codegen.annotate(std::string("object '") + name->get_string() + "'", line_number);
-  const auto loc = codegen.get_symbol_location(name);
-  if (loc.offset) {
-    emit_copy_to_reg(loc, ACC, s);
-    return CodeResult{};
-  }
-  if (cgen_optimize) {
-    return { loc.reg };
-  }
-  emit_move(ACC, loc.reg, s);
-  return CodeResult{};
+  return existing_location(codegen.get_symbol_location(name));
 }
