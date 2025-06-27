@@ -19,6 +19,7 @@ TESTS = [
     {"sources": ["new_complex"]},
     {"sources": ["palindrome"], "input": "palindrome.input"},
     {"sources": ["primes"]},
+    {"sources": ["sieve"], "input": "sieve.input"},
     {"sources": ["sort_list"], "input": "sort_list.input"},
 ]
 
