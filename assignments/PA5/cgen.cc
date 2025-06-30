@@ -1899,3 +1899,123 @@ std::unique_ptr<Location> object_class::code(ostream &s, CodeGenerator& codegen,
   auto a = codegen.annotate(std::string("object '") + name->get_string() + "'", line_number);
   return existing_location(codegen.get_symbol_location(name));
 }
+
+Variable CgenClassTable::create_temporary() {
+  return { Temporary, std::to_string(temporary_id) };
+}
+
+CodeBlockId CgenClassTable::create_code_block() {
+  code_blocks.push_back({});
+  return code_blocks.size() - 1;
+}
+
+class ScopedVariableImpl : public ScopedVariable {
+public:
+  ScopedVariableImpl(CgenClassTable& tbl) : tbl(tbl) {}
+  ~ScopedVariableImpl() override {
+    tbl.delete_scoped_variable();
+  }
+private:
+  CgenClassTable& tbl;
+};
+
+std::unique_ptr<ScopedVariable> CgenClassTable::new_scoped_variable(const Symbol name, const Variable& variable) {
+  scoped_variable_stack.push(name);
+  scoped_variables[name].push(variable);
+  return std::make_unique<ScopedVariableImpl>(*this);
+}
+
+void CgenClassTable::delete_scoped_variable() {
+  scoped_variables.at(scoped_variable_stack.top()).pop();
+  scoped_variable_stack.pop();
+}
+
+Variable CgenClassTable::find_variable_by_name(const Symbol name) {
+  return scoped_variables.at(name).top();
+}
+
+void CgenClassTable::append_statement(CodeBlockId code_block, std::unique_ptr<CodeStatement>&& statement) {
+  code_blocks[code_block].statements.push_back(std::move(statement));
+}
+
+void CgenClassTable::finish_block(CodeBlockId code_block, std::unique_ptr<FlowControlStatement>&& statement) {
+  code_blocks[code_block].final_statement = std::move(statement);
+}
+
+FindMethodResult2 CgenClassTable::find_method2(const Symbol class_name, const Symbol method_name) {
+  for (
+    auto class_node = class_name == SELF_TYPE ? current_class_node : probe(class_name);
+    class_node;
+    class_node = class_node->get_parentnd()
+  ) {
+    const auto& class_method_table = method_table[class_node->get_name()];
+    const auto iter = class_method_table.find(method_name);
+    if (iter != class_method_table.end()) {
+      return { class_node->get_name(), iter->second.dispatch_table_index };
+    }
+  }
+  throw std::runtime_error(
+    std::string("Method ") + method_name->get_string() + " not found in class " + class_name->get_string()
+  );
+}
+
+void CgenClassTable::compute_control_flow_graph() {
+  const auto scoped_self = new_scoped_variable(self, { FunctionArgument, "self" });
+  std::vector<Symbol> attr_names;
+  std::vector<Expression> attr_exprs;
+  auto process_class = [&](auto&& process_class, CgenNode* node) -> void {
+    current_class_node = node;
+    const auto class_name = node->get_name();
+    const auto features = node->get_features();
+    const auto prev_attrs_size = attr_exprs.size();
+    for (int i = features->first(); features->more(i); i = features->next(i)) {
+      const auto feature = features->nth(i);
+      if (!feature->is_method()) {
+        attr_names.push_back(feature->get_name());
+        attr_exprs.push_back(feature->get_expr());
+      }
+    }
+    const int attr_count = attr_names.size();
+    std::vector<std::unique_ptr<ScopedVariable>> scoped_attrs(attr_count - prev_attrs_size);
+    for (int i = prev_attrs_size; i < attr_count; ++i) {
+      scoped_attrs[i - prev_attrs_size] = new_scoped_variable(attr_names[i], { ObjectAttribute, attr_names[i]->get_string() });
+    }
+    reset_control_flow_graph();
+    auto code_block = create_code_block();
+    for (int i = 0; i < attr_count; ++i) {
+      if (attr_exprs[i]->get_type() && attr_exprs[i]->get_type() != No_type) {
+        code_block = attr_exprs[i]->compute_control_flow_graph(*this, code_block, find_variable_by_name(attr_names[i]));
+      }
+    }
+    const auto result = create_temporary();
+    code_block = std::make_unique<object_class>(self)->compute_control_flow_graph(*this, code_block, result);
+
+    if (!node->basic()) {
+      for (int i = features->first(); features->more(i); i = features->next(i)) {
+        const auto feature = features->nth(i);
+        if (!feature->is_method()) {
+          continue;
+        }
+        const auto formals = feature->get_formals();
+        const auto arg_cnt = formals->len();
+        std::vector<std::unique_ptr<ScopedVariable>> scoped_args(arg_cnt);
+        for (int j = formals->first(); formals->more(j); j = formals->next(j)) {
+          const auto formal = formals->nth(j);
+          scoped_args[j] = new_scoped_variable(formal->get_name(), { FunctionArgument, formal->get_name()->get_string() });
+        }
+        reset_control_flow_graph();
+        const auto start_code_block = create_code_block();
+        const auto result = create_temporary();
+        const auto end_code_block = feature->get_expr()->compute_control_flow_graph(*this, start_code_block, result);
+      }
+    }
+
+    for (List<CgenNode>* child = node->get_children(); child; child = child->tl()) {
+      process_class(process_class, child->hd());
+    }
+
+    attr_names.resize(prev_attrs_size);
+    attr_exprs.resize(prev_attrs_size);
+  };
+  process_class(process_class, root());
+}

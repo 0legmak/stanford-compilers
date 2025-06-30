@@ -7,13 +7,13 @@ AR= gar
 ARCHIVE_NEW= -cr
 RANLIB= gar -qs
 
-SRC= cgen.cc cgen.h cgen_supp.cc cool-tree.h cool-tree.handcode.h emit.h example.cl README
+SRC= cgen.cc cgen.h control_flow_graph.cc control_flow_graph.h cgen_supp.cc cool-tree.h cool-tree.handcode.h emit.h example.cl README
 CSRC= cgen-phase.cc utilities.cc stringtab.cc dumptype.cc tree.cc cool-tree.cc ast-lex.cc ast-parse.cc handle_flags.cc 
 TSRC= mycoolc
 CGEN=
 HGEN= 
 LIBS= lexer parser semant
-CFIL= cgen.cc cgen_supp.cc ${CSRC} ${CGEN}
+CFIL= cgen.cc cgen_supp.cc control_flow_graph.cc ${CSRC} ${CGEN}
 LSRC= Makefile
 OBJS= ${CFIL:.cc=.o}
 OUTPUT= good.output bad.output

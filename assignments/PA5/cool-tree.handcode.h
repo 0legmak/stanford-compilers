@@ -9,6 +9,7 @@
 #include "cool.h"
 #include "stringtab.h"
 #include "cgen-itf.h"
+#include "control_flow_graph.h"
 #define yylineno curr_lineno;
 extern int yylineno;
 
@@ -119,11 +120,14 @@ Expression set_type(Symbol s) { type = s; return this; } \
 virtual std::unique_ptr<Location> code(ostream&, CodeGenerator& codegen, bool alloc_res) = 0; \
 virtual void dump_with_types(ostream&,int) = 0;  \
 void dump_type(ostream&, int);               \
-Expression_class() { type = (Symbol) NULL; }
+Expression_class() { type = (Symbol) NULL; } \
+virtual CodeBlockId compute_control_flow_graph(ControlFlowGraph& control_flow_graph, CodeBlockId code_block, const Variable& result) = 0; \
+
 
 #define Expression_SHARED_EXTRAS           \
 std::unique_ptr<Location> code(ostream&, CodeGenerator& codegen, bool alloc_res); \
-void dump_with_types(ostream&,int); 
+void dump_with_types(ostream&,int); \
+CodeBlockId compute_control_flow_graph(ControlFlowGraph& control_flow_graph, CodeBlockId code_block, const Variable& result) override; \
 
 
 #endif

@@ -36,7 +36,7 @@ private:
    bool enabled = true;
 };
 
-class CgenClassTable : public SymbolTable<Symbol,CgenNode>, public CodeGenerator {
+class CgenClassTable : public SymbolTable<Symbol,CgenNode>, public CodeGenerator, public ControlFlowGraph {
 private:
    List<CgenNode> *nds;
    DiscardOrForwardStream str;
@@ -92,6 +92,31 @@ private:
 	std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) override;
    int get_dispatch_abort_label(StringEntryP file_name, int line_number) override;
 
+   // ControlFlowGraph
+   int temporary_id = 0;
+   struct CodeBlock {
+      std::vector<std::unique_ptr<CodeStatement>> statements;
+      std::unique_ptr<FlowControlStatement> final_statement;
+   };
+   std::vector<CodeBlock> code_blocks;
+   friend class ScopedVariableImpl;
+   std::stack<Symbol> scoped_variable_stack;
+   std::unordered_map<Symbol, std::stack<Variable>> scoped_variables;
+
+   void reset_control_flow_graph() {
+      temporary_id = 0;
+      code_blocks.clear();
+   }
+   Variable create_temporary() override;
+   CodeBlockId create_code_block() override;
+   std::unique_ptr<ScopedVariable> new_scoped_variable(const Symbol name, const Variable& variable) override;
+   void delete_scoped_variable();
+   Variable find_variable_by_name(const Symbol name) override;
+   void append_statement(CodeBlockId code_block, std::unique_ptr<CodeStatement>&& statement) override;
+   void finish_block(CodeBlockId code_block, std::unique_ptr<FlowControlStatement>&& statement) override;
+   FindMethodResult2 find_method2(Symbol class_name, Symbol method_name) override;
+
+   void compute_control_flow_graph();
 
 // The following methods emit code for
 // constants and global declarations.
@@ -146,15 +171,3 @@ public:
    void set_class_tag(int tag) { class_tag = tag; }
    int get_class_tag() const { return class_tag; }
 };
-
-class BoolConst 
-{
- private: 
-  int val;
- public:
-  BoolConst(int);
-  void code_def(ostream&, int boolclasstag);
-  void code_ref(ostream&) const;
-  bool get_val() const;
-};
-

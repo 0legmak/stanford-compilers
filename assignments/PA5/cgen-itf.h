@@ -80,3 +80,46 @@ public:
   virtual std::unique_ptr<Annotate> annotate(const std::string& message, int line_number) = 0;
   virtual int get_dispatch_abort_label(StringEntryP file_name, int line_number) = 0;
 };
+
+class BoolConst 
+{
+ private: 
+  int val;
+ public:
+  BoolConst(int);
+  void code_def(ostream&, int boolclasstag);
+  void code_ref(ostream&) const;
+  bool get_val() const;
+};
+
+extern Symbol
+  arg,
+  arg2,
+  Bool,
+  concat,
+  cool_abort,
+  copy,
+  Int,
+  in_int,
+  in_string,
+  IO,
+  length,
+  Main,
+  main_meth,
+  No_class,
+  No_type,
+  Object,
+  out_int,
+  out_string,
+  prim_slot,
+  self,
+  SELF_TYPE,
+  Str,
+  str_field,
+  substr,
+  type_name,
+  val;
+
+extern StringEntryP empty_string;
+extern IntEntryP zero_int;
+extern BoolConst falsebool;
